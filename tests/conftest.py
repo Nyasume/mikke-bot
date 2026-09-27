@@ -14,12 +14,12 @@ from aiogram.methods import GetFile, GetMe, TelegramMethod
 from aiogram.types import Chat, File, Message, User
 from cachetools import TTLCache
 
+from mikke.bot import build_bot, build_dispatcher
+from mikke.config import Settings
+from mikke.reports import Reporter
+from mikke.saucenao import SauceNao
+from mikke.search import CACHE_SIZE, CACHE_TTL_SECONDS, Searcher
 from payloads import ADMIN_ID, API_KEY, BOT_TOKEN, BOT_USERNAME, FAVOURITE_GROUP, IMAGE, PUBLIC_URL, Clock
-from reverse_search_bot.bot import build_bot, build_dispatcher
-from reverse_search_bot.config import Settings
-from reverse_search_bot.reports import Reporter
-from reverse_search_bot.saucenao import SauceNao
-from reverse_search_bot.search import CACHE_SIZE, CACHE_TTL_SECONDS, Searcher
 
 
 class FakeSession(BaseSession):
@@ -43,7 +43,7 @@ class FakeSession(BaseSession):
         if (error := self.errors.get(type(method)) or self.fail_once.pop(type(method), None)) is not None:
             raise error
         if isinstance(method, GetMe):
-            return User(id=bot.id, is_bot=True, first_name="Sauce", username=BOT_USERNAME)
+            return User(id=bot.id, is_bot=True, first_name="Mikke", username=BOT_USERNAME)
         if isinstance(method, GetFile):
             path = self.file_paths.get(method.file_id, f"photos/{method.file_id}.jpg")
             return File(file_id=method.file_id, file_unique_id=f"u-{method.file_id}", file_path=path)

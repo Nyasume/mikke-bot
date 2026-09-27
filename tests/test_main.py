@@ -1,9 +1,17 @@
 import asyncio
 import logging
 import sys
+from importlib.metadata import distribution
 
-from reverse_search_bot.__main__ import RedactingFormatter
-from reverse_search_bot.bot import InFlight
+import mikke.__main__
+from mikke.__main__ import RedactingFormatter
+from mikke.bot import InFlight
+
+
+def test_console_script_is_mikke():
+    scripts = {entry.name: entry for entry in distribution("mikke").entry_points if entry.group == "console_scripts"}
+    assert list(scripts) == ["mikke"]
+    assert scripts["mikke"].load() is mikke.__main__.main
 
 
 def test_log_formatter_redacts_secrets_in_messages_and_tracebacks():

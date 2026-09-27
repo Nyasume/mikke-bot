@@ -1,6 +1,6 @@
-# Reverse Search Bot
+# Mikke
 
-Telegram bot [@reverseSearch2Bot](https://t.me/reverseSearch2Bot) that finds the source of an image, sticker, GIF or video: title, characters, artist, anime episode and timestamp, with links to the sites it was found on. Searches go to [SauceNAO](https://saucenao.com).
+Mikke (みっけ, "found it!") is a Telegram bot, [@reverseSearch2Bot](https://t.me/reverseSearch2Bot), who finds where pictures come from. Show her an image, a sticker, a GIF or a video and she answers with the source: title, characters, artist, anime episode and timestamp, with links to the sites she found it on. Searches go to [SauceNAO](https://saucenao.com).
 
 - Private chat: send a picture, a sticker, an image file, a GIF or a video.
 - Groups: reply to a media message with `/sauce` or `/source` (or just `sauce`, `source`, `what?`).
@@ -15,7 +15,7 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.
 ```sh
 cp .env.example .env    # fill in BOT_TOKEN (a test bot) and SAUCENAO_API_KEY
 uv sync
-uv run reverse-search-bot
+uv run mikke
 ```
 
 `BOT_MODE=polling` (the default) is for local runs. Production runs `BOT_MODE=webhook` in Docker (`docker compose up -d --build`); see `.env.example` for all settings.
@@ -37,6 +37,6 @@ Tests are offline: Telegram is replaced by a fake session and SauceNAO is mocked
 
 ## Credits
 
-This bot started as [kawaiiDango/reverseSearchBot](https://github.com/kawaiiDango/reverseSearchBot) (Node.js, Apache-2.0), later run as the fork [AnyByte/reverseSearchBot](https://github.com/AnyByte/reverseSearchBot). The first commit of this repository imports upstream `5845465`; the current code is a from-scratch Python rewrite of its behaviour. See [NOTICE](NOTICE).
+Mikke started as [kawaiiDango/reverseSearchBot](https://github.com/kawaiiDango/reverseSearchBot) (Node.js, Apache-2.0), later run as the fork [AnyByte/reverseSearchBot](https://github.com/AnyByte/reverseSearchBot). The first commit of this repository imports upstream `5845465`; the current code is a from-scratch Python rewrite of its behaviour. See [NOTICE](NOTICE).
 
 Licensed under the [Apache License 2.0](LICENSE).

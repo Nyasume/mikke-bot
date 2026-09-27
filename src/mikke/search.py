@@ -9,11 +9,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup
 from cachetools import TTLCache
 
-from reverse_search_bot import texts
-from reverse_search_bot.media import Media
-from reverse_search_bot.reports import Reporter
-from reverse_search_bot.results import Match, fallback_keyboard, render, select
-from reverse_search_bot.saucenao import QuotaExceededError, SauceNao
+from mikke import texts
+from mikke.media import Media
+from mikke.reports import Reporter
+from mikke.results import Match, fallback_keyboard, render, select
+from mikke.saucenao import QuotaExceededError, SauceNao
 
 logger = logging.getLogger(__name__)
 

@@ -4,6 +4,8 @@ import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.methods import AnswerInlineQuery, EditMessageText, GetFile, SendMessage
 
+from mikke import texts
+from mikke.saucenao import SEARCH_URL
 from payloads import (
     ADMIN_ID,
     ANIME,
@@ -18,8 +20,6 @@ from payloads import (
     sauce_response,
     update,
 )
-from reverse_search_bot import texts
-from reverse_search_bot.saucenao import SEARCH_URL
 
 STATIC_STICKER = {
     "file_id": "sticker-id",
@@ -184,7 +184,7 @@ async def test_start_and_help(harness, text):
 
 
 async def test_added_to_group_sends_help(harness):
-    bot_user = {"id": harness.bot.id, "is_bot": True, "first_name": "Sauce", "username": BOT_USERNAME}
+    bot_user = {"id": harness.bot.id, "is_bot": True, "first_name": "Mikke", "username": BOT_USERNAME}
     await harness.feed(update(message(GROUP, new_chat_members=[bot_user])))
     [reply] = _sent(harness)
     assert (reply.chat_id, reply.text) == (GROUP["id"], texts.HELP)

@@ -1,11 +1,11 @@
-# Production: ~/BOTS/reverseSearchBot/ on skrime-vps, next to a .env made from .env.example.
-# Traefik (file provider) routes https://anybyte.org/telebot/rsbot -> rsbot:8080 with the
+# Production: ~/BOTS/mikke/ on skrime-vps, next to a .env made from .env.example.
+# Traefik (file provider) routes https://anybyte.org/telebot/rsbot -> mikke:8080 with the
 # /telebot/rsbot prefix stripped, so no ports are published here.
 services:
-  rsbot:
+  mikke:
     build: .
-    image: reverse-search-bot:latest
-    container_name: rsbot
+    image: mikke:latest
+    container_name: mikke
     restart: unless-stopped
     env_file: .env
     environment:

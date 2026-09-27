@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     favourite_groups: Annotated[list[int], NoDecode] = []
 
     bot_mode: Literal["polling", "webhook"] = "polling"
-    # Public base URL of the bot's HTTP server, e.g. https://anybyte.org/telebot/rsbot.
+    # Public base URL of the bot's HTTP server, e.g. https://example.org/mikke.
     # The webhook is `<PUBLIC_URL>/` and token-free image links are `<PUBLIC_URL>/img/<file_id>`.
     # Required for webhook mode; without it, file searches get no fallback links.
     public_url: str | None = None

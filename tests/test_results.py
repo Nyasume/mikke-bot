@@ -3,9 +3,9 @@ from pathlib import Path
 
 import pytest
 
+from mikke import texts
+from mikke.results import fallback_keyboard, grid, keyboard, links, render, render_text, select
 from payloads import ANIME, result
-from reverse_search_bot import texts
-from reverse_search_bot.results import fallback_keyboard, grid, keyboard, links, render, render_text, select
 
 SAMPLE_NOMATCH = Path(__file__).parent.parent / "docs" / "legacy" / "saucenao-sample-nomatch.json"
 
@@ -154,9 +154,9 @@ def test_no_links_means_no_keyboard():
 
 
 def test_fallback_keyboard_links_the_image_everywhere():
-    markup = fallback_keyboard("https://example.org/rsbot/img/abc")
+    markup = fallback_keyboard("https://example.org/mikke/img/abc")
     assert _layout(markup) == [["Google Lens", "SauceNAO", "TinEye"]]
-    encoded = "https%3A%2F%2Fexample.org%2Frsbot%2Fimg%2Fabc"
+    encoded = "https%3A%2F%2Fexample.org%2Fmikke%2Fimg%2Fabc"
     assert [button.url for button in markup.inline_keyboard[0]] == [
         f"https://lens.google.com/uploadbyurl?url={encoded}",
         f"https://saucenao.com/search.php?url={encoded}",

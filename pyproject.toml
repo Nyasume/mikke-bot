@@ -1,7 +1,7 @@
 [project]
-name = "reverse-search-bot"
+name = "mikke"
 version = "2.0.0"
-description = "Telegram reverse image search bot backed by SauceNAO"
+description = "Mikke: a Telegram bot that finds where pictures come from (SauceNAO, trace.moe)"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.13"
@@ -21,14 +21,14 @@ dev = [
 ]
 
 [project.scripts]
-reverse-search-bot = "reverse_search_bot.__main__:main"
+mikke = "mikke.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/reverse_search_bot"]
+packages = ["src/mikke"]
 
 [tool.ruff]
 target-version = "py313"
@@ -40,7 +40,7 @@ select = ["E", "W", "F", "I", "B", "C4", "UP", "SIM", "ASYNC", "RET", "PL"]
 ignore = ["E501", "PLR0911", "PLR0912", "PLR0913", "PLR2004", "SIM108"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["reverse_search_bot"]
+known-first-party = ["mikke"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

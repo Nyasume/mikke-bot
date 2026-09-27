@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from reverse_search_bot.config import Settings
+from mikke.config import Settings
 
 REQUIRED = {"BOT_TOKEN": "42:TEST", "SAUCENAO_API_KEY": "key"}
 
@@ -34,17 +34,17 @@ def test_id_lists_are_comma_separated(env):
 
 
 def test_public_url_trailing_slash_is_dropped(env):
-    env.setenv("PUBLIC_URL", "https://anybyte.org/telebot/rsbot/")
-    assert Settings(_env_file=None).public_url == "https://anybyte.org/telebot/rsbot"
+    env.setenv("PUBLIC_URL", "https://mikke.example.org/bot/")
+    assert Settings(_env_file=None).public_url == "https://mikke.example.org/bot"
 
 
 @pytest.mark.parametrize(
     "extra",
     [
         {},
-        {"PUBLIC_URL": "https://anybyte.org/telebot/rsbot"},
+        {"PUBLIC_URL": "https://mikke.example.org/bot"},
         {"WEBHOOK_SECRET": "abc"},
-        {"PUBLIC_URL": "https://anybyte.org/telebot/rsbot", "WEBHOOK_SECRET": "not allowed!"},
+        {"PUBLIC_URL": "https://mikke.example.org/bot", "WEBHOOK_SECRET": "not allowed!"},
     ],
 )
 def test_webhook_mode_needs_public_url_and_valid_secret(env, extra):
@@ -57,7 +57,7 @@ def test_webhook_mode_needs_public_url_and_valid_secret(env, extra):
 
 def test_webhook_mode_ok(env):
     env.setenv("BOT_MODE", "webhook")
-    env.setenv("PUBLIC_URL", "https://anybyte.org/telebot/rsbot")
+    env.setenv("PUBLIC_URL", "https://mikke.example.org/bot")
     env.setenv("WEBHOOK_SECRET", "Secret_123-abc")
     assert Settings(_env_file=None).webhook_secret.get_secret_value() == "Secret_123-abc"
 

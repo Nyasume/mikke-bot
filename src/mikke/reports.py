@@ -8,7 +8,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import InlineKeyboardMarkup
 
-from reverse_search_bot.media import Media
+from mikke.media import Media
 
 logger = logging.getLogger(__name__)
 

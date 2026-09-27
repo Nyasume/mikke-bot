@@ -7,12 +7,12 @@ import httpx
 from aiohttp import web
 from pydantic import ValidationError
 
-from reverse_search_bot.bot import InFlight, build_bot, build_dispatcher
-from reverse_search_bot.config import Settings
-from reverse_search_bot.reports import Reporter
-from reverse_search_bot.saucenao import SauceNao
-from reverse_search_bot.search import Searcher
-from reverse_search_bot.web import build_app
+from mikke.bot import InFlight, build_bot, build_dispatcher
+from mikke.config import Settings
+from mikke.reports import Reporter
+from mikke.saucenao import SauceNao
+from mikke.search import Searcher
+from mikke.web import build_app
 
 logger = logging.getLogger(__name__)
 

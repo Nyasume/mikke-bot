@@ -9,10 +9,10 @@ from aiogram.client.session.base import BaseSession
 from aiogram.enums import ParseMode
 from aiogram.types import TelegramObject
 
-from reverse_search_bot.config import Settings
-from reverse_search_bot.handlers import build_router, on_error
-from reverse_search_bot.reports import Reporter
-from reverse_search_bot.search import Searcher
+from mikke.config import Settings
+from mikke.handlers import build_router, on_error
+from mikke.reports import Reporter
+from mikke.search import Searcher
 
 
 def build_bot(settings: Settings, session: BaseSession | None = None) -> Bot:

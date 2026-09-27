@@ -7,7 +7,7 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from reverse_search_bot import texts
+from mikke import texts
 
 MIN_SIMILARITY = 60.0
 TOLERANCE = 7.0

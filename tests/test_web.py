@@ -6,9 +6,9 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import GetFile, SendMessage
 from aiohttp import test_utils
 
+from mikke import texts
+from mikke.web import build_app
 from payloads import BOT_TOKEN, IMAGE, message, telegram_file_error, update
-from reverse_search_bot import texts
-from reverse_search_bot.web import build_app
 
 SECRET = "webhook-secret_1"
 

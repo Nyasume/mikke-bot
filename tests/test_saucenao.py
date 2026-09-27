@@ -1,8 +1,7 @@
 import httpx
 import pytest
 
-from payloads import ANIME, API_KEY, IMAGE, Clock, sauce_response
-from reverse_search_bot.saucenao import (
+from mikke.saucenao import (
     LONG_WINDOW_RETRY_SECONDS,
     SEARCH_URL,
     SHORT_WINDOW_SECONDS,
@@ -10,6 +9,7 @@ from reverse_search_bot.saucenao import (
     SauceNao,
     SauceNaoError,
 )
+from payloads import ANIME, API_KEY, IMAGE, Clock, sauce_response
 
 
 @pytest.fixture

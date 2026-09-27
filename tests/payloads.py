@@ -8,11 +8,11 @@ import aiohttp
 from yarl import URL
 
 BOT_TOKEN = "42:TEST-token"
-BOT_USERNAME = "SauceTestBot"
+BOT_USERNAME = "MikkeTestBot"
 API_KEY = "sauce-key"
 ADMIN_ID = 1
 FAVOURITE_GROUP = -1001
-PUBLIC_URL = "https://example.org/rsbot"
+PUBLIC_URL = "https://example.org/mikke"
 IMAGE = b"\xff\xd8\xff\xe0 fake jpeg"
 
 

@@ -1,11 +1,11 @@
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import GetFile, SendMessage, SendPhoto, SendSticker
 
+from mikke import texts
+from mikke.media import Media
+from mikke.saucenao import SEARCH_URL
+from mikke.search import CACHE_TTL_SECONDS
 from payloads import ADMIN_ID, ANIME, BOT_TOKEN, PUBLIC_URL, sauce_response, telegram_file_error
-from reverse_search_bot import texts
-from reverse_search_bot.media import Media
-from reverse_search_bot.saucenao import SEARCH_URL
-from reverse_search_bot.search import CACHE_TTL_SECONDS
 
 PHOTO = Media("photo-file-id", "photo-unique", "photo", "photo-file-id")
 ANIMATED_STICKER = Media("sticker-thumb-id", "thumb-unique", "sticker", "sticker-file-id")
@@ -28,7 +28,7 @@ async def test_found_result_is_rendered_and_reported(respx_mock, harness):
     assert BOT_TOKEN not in str(request.url)
 
     [report] = _admin_messages(harness)
-    assert "https://saucenao.com/search.php?url=https%3A%2F%2Fexample.org%2Frsbot%2Fimg%2Fphoto-file-id" in report.text
+    assert "https://saucenao.com/search.php?url=https%3A%2F%2Fexample.org%2Fmikke%2Fimg%2Fphoto-file-id" in report.text
     assert report.text.endswith(answer.text)
     assert BOT_TOKEN not in report.text
     [photo] = harness.session.calls(SendPhoto)

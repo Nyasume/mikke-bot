@@ -19,11 +19,11 @@ from aiogram.types import (
     ReplyParameters,
 )
 
-from reverse_search_bot import texts
-from reverse_search_bot.flood import FloodMiddleware
-from reverse_search_bot.media import Media, find_media, normalize_url
-from reverse_search_bot.reports import Reporter
-from reverse_search_bot.search import Answer, Searcher
+from mikke import texts
+from mikke.flood import FloodMiddleware
+from mikke.media import Media, find_media, normalize_url
+from mikke.reports import Reporter
+from mikke.search import Answer, Searcher
 
 logger = logging.getLogger(__name__)
 
