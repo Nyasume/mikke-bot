@@ -1,0 +1,11 @@
+Reverse Search Bot
+Copyright 2026 Nyasume
+
+This product is a Python rewrite of reverseSearchBot by kawaiiDango
+(https://github.com/kawaiiDango/reverseSearchBot), licensed under the
+Apache License, Version 2.0. The repository history starts with an import of
+upstream commit 5845465; the rewrite reimplements its behaviour and does not
+reuse its code.
+
+docs/legacy/deployed-parseSauceNao.js is derived from the upstream code and is
+kept for reference only.
