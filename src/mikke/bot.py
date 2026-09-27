@@ -16,9 +16,9 @@ from mikke.scenes import SceneSearcher
 from mikke.search import Searcher
 
 
-def build_bot(settings: Settings, session: BaseSession | None = None) -> Bot:
+def build_bot(token: str, session: BaseSession | None = None) -> Bot:
     return Bot(
-        settings.bot_token.get_secret_value(),
+        token,
         session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML, link_preview_is_disabled=True),
     )
@@ -58,6 +58,7 @@ class InFlight(BaseMiddleware):
 
 
 def build_dispatcher(settings: Settings, searcher: Searcher, scenes: SceneSearcher, reporter: Reporter) -> Dispatcher:
+    """One dispatcher for every bot: aiogram hands each handler the bot that received the update as `bot`."""
     dp = Dispatcher(searcher=searcher, scenes=scenes, reporter=reporter)
     dp["in_flight"] = in_flight = InFlight()
     dp.update.outer_middleware(in_flight)

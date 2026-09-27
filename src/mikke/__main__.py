@@ -15,7 +15,7 @@ from mikke.saucenao import SauceNao
 from mikke.scenes import SceneSearcher
 from mikke.search import Searcher
 from mikke.tracemoe import TraceMoe
-from mikke.web import build_app
+from mikke.web import build_app, webhooks
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,8 @@ async def _wait_for_stop_signal() -> None:
 async def run(settings: Settings) -> None:
     # inside the event loop, which the Sentry asyncio integration patches
     init_sentry(settings)
-    bot = build_bot(settings)
+    # the primary bot first; one dispatcher answers them all
+    bots = [build_bot(token) for token in settings.bot_tokens()]
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as http:
         saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value())
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
@@ -59,29 +60,36 @@ async def run(settings: Settings) -> None:
 
         webhook = settings.bot_mode == "webhook"
         secret = settings.webhook_secret.get_secret_value() if webhook and settings.webhook_secret else None
-        runner = web.AppRunner(build_app(bot, dp, webhook_secret=secret))
+        runner = web.AppRunner(build_app(bots, dp, webhook_secret=secret))
         await runner.setup()
         site = web.TCPSite(runner, settings.web_host, settings.web_port)
         await site.start()
         logger.info("HTTP server on %s:%s, %s mode", settings.web_host, settings.web_port, settings.bot_mode)
         try:
-            if webhook:
-                await bot.set_webhook(
-                    f"{settings.public_url}/",
-                    secret_token=secret,
-                    allowed_updates=dp.resolve_used_update_types(),
-                )
+            for bot in bots:
+                # getMe is cached from here on
+                me = await bot.me()
+                logger.info("Answering as @%s (id %s)", me.username, me.id)
+            if webhook and secret is not None:
+                for hook in webhooks(bots, secret):
+                    await hook.bot.set_webhook(
+                        f"{settings.public_url}{hook.path}",
+                        secret_token=hook.secret,
+                        allowed_updates=dp.resolve_used_update_types(),
+                    )
                 await _wait_for_stop_signal()
                 # stop taking updates, then let the ones in progress finish their edits
                 await site.stop()
                 in_flight: InFlight = dp["in_flight"]
                 await in_flight.wait(SHUTDOWN_GRACE_SECONDS)
             else:
-                await bot.delete_webhook(drop_pending_updates=True)
-                await dp.start_polling(bot)
+                for bot in bots:
+                    await bot.delete_webhook(drop_pending_updates=True)
+                await dp.start_polling(*bots)
         finally:
             await runner.cleanup()
-            await bot.session.close()
+            for bot in bots:
+                await bot.session.close()
 
 
 def main() -> None:

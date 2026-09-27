@@ -3,9 +3,14 @@ import logging
 import sys
 from importlib.metadata import distribution
 
+from aiogram import Dispatcher
+from aiogram.methods import DeleteWebhook, GetUpdates, SetWebhook
+
 import mikke.__main__
-from mikke.__main__ import RedactingFormatter
+from mikke.__main__ import RedactingFormatter, run
 from mikke.bot import InFlight
+from mikke.config import derive_secret
+from payloads import EXTRA_BOT_TOKEN, PUBLIC_URL
 
 
 def test_console_script_is_mikke():
@@ -47,3 +52,50 @@ async def test_in_flight_waits_for_running_updates():
 
 async def test_in_flight_returns_at_once_when_idle():
     await asyncio.wait_for(InFlight().wait(10), 0.1)
+
+
+def _run_with_harness_bots(monkeypatch, harness) -> None:
+    """Make run() use the harness bots, with their fake sessions, and return at once instead of waiting for SIGTERM."""
+    by_token = {bot.token: bot for bot in harness.bots}
+    monkeypatch.setattr(mikke.__main__, "build_bot", lambda token: by_token[token])
+
+    async def no_wait() -> None:
+        pass
+
+    monkeypatch.setattr(mikke.__main__, "_wait_for_stop_signal", no_wait)
+
+
+async def test_webhook_mode_registers_each_bots_webhook(make_harness, monkeypatch):
+    harness = make_harness(
+        extra_bot_tokens=[EXTRA_BOT_TOKEN], bot_mode="webhook", webhook_secret="hook", web_host="127.0.0.1", web_port=0
+    )
+    _run_with_harness_bots(monkeypatch, harness)
+
+    await run(harness.settings)
+
+    primary, extra = harness.sessions
+    [primary_hook], [extra_hook] = primary.calls(SetWebhook), extra.calls(SetWebhook)
+    assert (primary_hook.url, primary_hook.secret_token) == (f"{PUBLIC_URL}/", "hook")
+    assert (extra_hook.url, extra_hook.secret_token) == (f"{PUBLIC_URL}/43/", derive_secret("hook", 43))
+    assert extra_hook.allowed_updates == primary_hook.allowed_updates
+    assert {"message", "callback_query", "inline_query", "chosen_inline_result"} <= set(primary_hook.allowed_updates)
+    assert primary.calls(DeleteWebhook) == extra.calls(DeleteWebhook) == []
+
+
+async def test_polling_mode_polls_every_bot(make_harness, monkeypatch):
+    harness = make_harness(extra_bot_tokens=[EXTRA_BOT_TOKEN], web_host="127.0.0.1", web_port=0)
+    _run_with_harness_bots(monkeypatch, harness)
+    polled = []
+
+    async def start_polling(self, *bots, **kwargs):
+        polled.extend(bots)
+
+    monkeypatch.setattr(Dispatcher, "start_polling", start_polling)
+
+    await run(harness.settings)
+
+    assert polled == harness.bots
+    for session in harness.sessions:
+        [delete] = session.calls(DeleteWebhook)
+        assert delete.drop_pending_updates is True
+        assert session.calls(SetWebhook) == session.calls(GetUpdates) == []

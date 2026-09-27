@@ -71,9 +71,12 @@ class Searcher:
             cache if cache is not None else TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS)
         )
 
-    def image_url(self, file_id: str) -> str | None:
-        """Public, token-free link to a Telegram file, served by our own /img/ route."""
-        return f"{self._public_url}/img/{file_id}" if self._public_url else None
+    def image_url(self, bot: Bot, file_id: str) -> str | None:
+        """Public, token-free link to a Telegram file, served by our own /img/ route.
+
+        A file_id only works with the bot that received the file, so the link names that bot.
+        """
+        return f"{self._public_url}/img/{bot.id}/{file_id}" if self._public_url else None
 
     async def search_file(self, bot: Bot, media: Media) -> Answer:
         async def query() -> list[dict]:
@@ -82,7 +85,7 @@ class Searcher:
             image, filename = await download(bot, media)
             return await self._saucenao.search(image=image, filename=filename)
 
-        return await self._search(bot, media.file_unique_id, self.image_url(media.file_id), media, query)
+        return await self._search(bot, media.file_unique_id, self.image_url(bot, media.file_id), media, query)
 
     async def search_url(self, bot: Bot, url: str) -> Answer:
         return await self._search(bot, f"url:{url}", url, None, lambda: self._saucenao.search(url=url))

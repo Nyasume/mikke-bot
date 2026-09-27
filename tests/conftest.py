@@ -21,11 +21,11 @@ from mikke.saucenao import SauceNao
 from mikke.scenes import SceneSearcher
 from mikke.search import CACHE_SIZE, CACHE_TTL_SECONDS, Searcher
 from mikke.tracemoe import TraceMoe
-from payloads import ADMIN_ID, API_KEY, BOT_TOKEN, BOT_USERNAME, FAVOURITE_GROUP, IMAGE, PUBLIC_URL, Clock
+from payloads import ADMIN_ID, API_KEY, BOT_TOKEN, FAVOURITE_GROUP, IMAGE, PUBLIC_URL, USERNAMES, Clock
 
 
 class FakeSession(BaseSession):
-    """Records every Bot API call and answers with plausible objects."""
+    """Records every Bot API call and answers with plausible objects. Each bot has its own."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -45,7 +45,7 @@ class FakeSession(BaseSession):
         if (error := self.errors.get(type(method)) or self.fail_once.pop(type(method), None)) is not None:
             raise error
         if isinstance(method, GetMe):
-            return User(id=bot.id, is_bot=True, first_name="Mikke", username=BOT_USERNAME)
+            return User(id=bot.id, is_bot=True, first_name="Mikke", username=USERNAMES[bot.id])
         if isinstance(method, GetFile):
             path = self.file_paths.get(method.file_id, f"photos/{method.file_id}.jpg")
             return File(file_id=method.file_id, file_unique_id=f"u-{method.file_id}", file_path=path)
@@ -77,8 +77,7 @@ class FakeSession(BaseSession):
 @dataclass
 class Harness:
     settings: Settings
-    session: FakeSession
-    bot: Bot
+    bots: list[Bot]  # the primary bot first, each with its own FakeSession
     dp: Dispatcher
     searcher: Searcher
     saucenao: SauceNao
@@ -86,8 +85,21 @@ class Harness:
     tracemoe: TraceMoe
     clock: Clock
 
-    async def feed(self, update: dict) -> None:
-        await self.dp.feed_raw_update(self.bot, update)
+    @property
+    def bot(self) -> Bot:
+        return self.bots[0]
+
+    @property
+    def session(self) -> FakeSession:
+        return self.sessions[0]
+
+    @property
+    def sessions(self) -> list[FakeSession]:
+        return [bot.session for bot in self.bots]
+
+    async def feed(self, update: dict, bot: Bot | None = None) -> None:
+        """Hand `update` to the dispatcher as received by `bot`, the primary bot by default."""
+        await self.dp.feed_raw_update(bot or self.bot, update)
 
 
 def make_settings(**overrides: Any) -> Settings:
@@ -115,8 +127,7 @@ async def http() -> AsyncGenerator[httpx.AsyncClient]:
 def make_harness(http: httpx.AsyncClient):
     def factory(**overrides: Any) -> Harness:
         settings = make_settings(**overrides)
-        session = FakeSession()
-        bot = build_bot(settings, session=session)
+        bots = [build_bot(token, session=FakeSession()) for token in settings.bot_tokens()]
         clock = Clock()
         saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value(), clock=clock)
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
@@ -126,7 +137,7 @@ def make_harness(http: httpx.AsyncClient):
         scene_cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
         scenes = SceneSearcher(tracemoe, reporter, cache=scene_cache)
         dp = build_dispatcher(settings, searcher, scenes, reporter)
-        return Harness(settings, session, bot, dp, searcher, saucenao, scenes, tracemoe, clock)
+        return Harness(settings, bots, dp, searcher, saucenao, scenes, tracemoe, clock)
 
     return factory
 

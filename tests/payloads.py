@@ -9,6 +9,10 @@ from yarl import URL
 
 BOT_TOKEN = "42:TEST-token"
 BOT_USERNAME = "MikkeTestBot"
+# a second bot served by the same process
+EXTRA_BOT_TOKEN = "43:EXTRA-token"
+EXTRA_BOT_USERNAME = "MikkeSauceTestBot"
+USERNAMES = {42: BOT_USERNAME, 43: EXTRA_BOT_USERNAME}
 API_KEY = "sauce-key"
 ADMIN_ID = 1
 FAVOURITE_GROUP = -1001

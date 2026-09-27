@@ -28,7 +28,7 @@ async def test_found_result_is_rendered_and_reported(respx_mock, harness):
     assert BOT_TOKEN not in str(request.url)
 
     [report] = _admin_messages(harness)
-    assert "https://saucenao.com/search.php?url=https%3A%2F%2Fexample.org%2Fmikke%2Fimg%2Fphoto-file-id" in report.text
+    assert "https://saucenao.com/search.php?url=https%3A%2F%2Fexample.org%2Fmikke%2Fimg%2F42%2Fphoto-file-id" in report.text
     assert report.text.endswith(answer.text)
     assert BOT_TOKEN not in report.text
     [photo] = harness.session.calls(SendPhoto)
@@ -97,7 +97,7 @@ async def test_no_result_is_cached_and_offers_fallback_links(respx_mock, harness
         "ascii2d",
         "TinEye",
     ]
-    assert f"{PUBLIC_URL}/img/photo-file-id".replace(":", "%3A").replace("/", "%2F") in answer.keyboard.inline_keyboard[0][0].url
+    assert f"{PUBLIC_URL}/img/42/photo-file-id".replace(":", "%3A").replace("/", "%2F") in answer.keyboard.inline_keyboard[0][0].url
     assert again == answer
     assert route.call_count == 1
     assert _admin_messages(harness) == []

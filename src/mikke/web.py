@@ -1,8 +1,9 @@
-"""The bot's only HTTP server: Telegram webhook, token-free images, health check."""
+"""The bots' only HTTP server: Telegram webhooks, token-free images, health check."""
 
 import contextlib
 import logging
 import re
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 import aiohttp
@@ -10,6 +11,8 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
 from aiohttp import web
+
+from mikke.config import derive_secret
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +28,33 @@ IMAGE_TYPES = {
 }
 
 
-def build_app(bot: Bot, dp: Dispatcher, webhook_secret: str | None = None) -> web.Application:
-    """Routes: GET /healthz, GET /img/<file_id>, and POST / (the webhook) when a secret is given."""
+@dataclass(frozen=True)
+class Webhook:
+    bot: Bot
+    path: str
+    secret: str
+
+
+def webhooks(bots: list[Bot], secret: str) -> list[Webhook]:
+    """Each bot's webhook path and secret; no path holds a token.
+
+    The primary bot (the first) keeps `/` and WEBHOOK_SECRET, where its webhook
+    has always been; every other bot gets `/<bot id>/` and a secret derived from
+    WEBHOOK_SECRET and its id.
+    """
+    primary, *extra = bots
+    return [
+        Webhook(primary, "/", secret),
+        *(Webhook(bot, f"/{bot.id}/", derive_secret(secret, bot.id)) for bot in extra),
+    ]
+
+
+def build_app(bots: list[Bot], dp: Dispatcher, webhook_secret: str | None = None) -> web.Application:
+    """Routes: GET /healthz, GET /img/<bot id>/<file_id> and /img/<file_id>, and a webhook per bot when a secret is given.
+
+    `bots` starts with the primary bot.
+    """
+    by_id = {bot.id: bot for bot in bots}
 
     async def healthz(_request: web.Request) -> web.Response:
         return web.Response(text="ok")
@@ -36,15 +64,18 @@ def build_app(bot: Bot, dp: Dispatcher, webhook_secret: str | None = None) -> we
 
         getFile runs on every request: the file_id stays valid, while the
         file_path download link expires after about an hour, so the fallback
-        links in old messages keep working.
+        links in old messages keep working. A file_id only works with the bot
+        that received the file: links name it, and the ones from before there
+        were several bots, /img/<file_id>, all come from the primary bot.
         """
         file_id = request.match_info["file_id"]
-        if not FILE_ID_RE.fullmatch(file_id):
+        bot = by_id.get(int(request.match_info["bot_id"])) if "bot_id" in request.match_info else bots[0]
+        if bot is None or not FILE_ID_RE.fullmatch(file_id):
             raise web.HTTPNotFound
         try:
             file = await bot.get_file(file_id)
         except TelegramAPIError as e:
-            logger.info("getFile failed for /img/%s: %s", file_id, e)
+            logger.info("getFile failed for /img/%s/%s: %s", bot.id, file_id, e)
             raise web.HTTPNotFound from e
         content_type = IMAGE_TYPES.get(PurePosixPath(file.file_path or "").suffix.lower())
         if not file.file_path or content_type is None:
@@ -60,7 +91,9 @@ def build_app(bot: Bot, dp: Dispatcher, webhook_secret: str | None = None) -> we
                 first = await anext(chunks, b"")
             except (aiohttp.ClientError, TimeoutError) as e:
                 # the error text holds the file URL with the token: log the type and status only
-                logger.warning("Downloading /img/%s failed: %s %s", file_id, type(e).__name__, getattr(e, "status", ""))
+                logger.warning(
+                    "Downloading /img/%s/%s failed: %s %s", bot.id, file_id, type(e).__name__, getattr(e, "status", "")
+                )
                 raise web.HTTPBadGateway from None
             response = web.StreamResponse(headers=headers)
             await response.prepare(request)
@@ -72,7 +105,9 @@ def build_app(bot: Bot, dp: Dispatcher, webhook_secret: str | None = None) -> we
 
     app = web.Application()
     app.router.add_get("/healthz", healthz)
+    app.router.add_get(r"/img/{bot_id:\d{1,20}}/{file_id}", image)
     app.router.add_get("/img/{file_id}", image)
     if webhook_secret is not None:
-        SimpleRequestHandler(dispatcher=dp, bot=bot, secret_token=webhook_secret).register(app, path="/")
+        for hook in webhooks(bots, webhook_secret):
+            SimpleRequestHandler(dispatcher=dp, bot=hook.bot, secret_token=hook.secret).register(app, path=hook.path)
     return app

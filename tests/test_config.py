@@ -168,7 +168,15 @@ def test_secrets_include_the_extra_bots_tokens_and_webhook_secrets(env):
 
     env.setenv("WEBHOOK_SECRET", "hook")
     secrets = Settings(_env_file=None).secrets()
-    assert secrets == ["42:TEST", "43:EXTRA", "44:MORE", "key", "hook", derive_secret("hook", 43), derive_secret("hook", 44)]
+    assert secrets == [
+        "42:TEST",
+        "43:EXTRA",
+        "44:MORE",
+        "key",
+        "hook",
+        derive_secret("hook", 43),
+        derive_secret("hook", 44),
+    ]
 
 
 def test_derived_webhook_secrets_differ_per_bot_and_suit_telegram():

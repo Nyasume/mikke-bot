@@ -101,7 +101,7 @@ def _bad_request(text: str) -> TelegramBadRequest:
 
 
 async def _client(harness, secret: str | None = None) -> test_utils.TestClient:
-    client = test_utils.TestClient(test_utils.TestServer(build_app(harness.bot, harness.dp, webhook_secret=secret)))
+    client = test_utils.TestClient(test_utils.TestServer(build_app(harness.bots, harness.dp, webhook_secret=secret)))
     await client.start_server()
     return client
 
