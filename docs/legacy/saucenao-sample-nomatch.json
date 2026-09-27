@@ -1,0 +1,373 @@
+{
+ "header": {
+  "account_type": "1",
+  "short_limit": "4",
+  "long_limit": "100",
+  "long_remaining": 96,
+  "short_remaining": 2,
+  "status": 0,
+  "results_requested": 5,
+  "index": {
+   "0": {
+    "status": 0,
+    "parent_id": 0,
+    "id": 0,
+    "results": 1
+   },
+   "2": {
+    "status": 0,
+    "parent_id": 2,
+    "id": 2,
+    "results": 1
+   },
+   "5": {
+    "status": 0,
+    "parent_id": 5,
+    "id": 5,
+    "results": 1
+   },
+   "51": {
+    "status": 0,
+    "parent_id": 5,
+    "id": 51,
+    "results": 1
+   },
+   "52": {
+    "status": 0,
+    "parent_id": 5,
+    "id": 52,
+    "results": 1
+   },
+   "53": {
+    "status": 0,
+    "parent_id": 5,
+    "id": 53,
+    "results": 1
+   },
+   "6": {
+    "status": 0,
+    "parent_id": 6,
+    "id": 6,
+    "results": 1
+   },
+   "8": {
+    "status": 0,
+    "parent_id": 8,
+    "id": 8,
+    "results": 1
+   },
+   "9": {
+    "status": 0,
+    "parent_id": 9,
+    "id": 9,
+    "results": 8
+   },
+   "10": {
+    "status": 0,
+    "parent_id": 10,
+    "id": 10,
+    "results": 1
+   },
+   "11": {
+    "status": 0,
+    "parent_id": 11,
+    "id": 11,
+    "results": 1
+   },
+   "12": {
+    "status": 0,
+    "parent_id": 9,
+    "id": 12,
+    "results": 8
+   },
+   "16": {
+    "status": 0,
+    "parent_id": 16,
+    "id": 16,
+    "results": 1
+   },
+   "18": {
+    "status": 0,
+    "parent_id": 18,
+    "id": 18,
+    "results": 1
+   },
+   "19": {
+    "status": 0,
+    "parent_id": 19,
+    "id": 19,
+    "results": 1
+   },
+   "20": {
+    "status": 0,
+    "parent_id": 20,
+    "id": 20,
+    "results": 1
+   },
+   "21": {
+    "status": 0,
+    "parent_id": 21,
+    "id": 21,
+    "results": 1
+   },
+   "211": {
+    "status": 0,
+    "parent_id": 21,
+    "id": 211,
+    "results": 1
+   },
+   "22": {
+    "status": 0,
+    "parent_id": 22,
+    "id": 22,
+    "results": 1
+   },
+   "23": {
+    "status": 0,
+    "parent_id": 23,
+    "id": 23,
+    "results": 1
+   },
+   "24": {
+    "status": 0,
+    "parent_id": 24,
+    "id": 24,
+    "results": 1
+   },
+   "25": {
+    "status": 0,
+    "parent_id": 9,
+    "id": 25,
+    "results": 8
+   },
+   "26": {
+    "status": 0,
+    "parent_id": 9,
+    "id": 26,
+    "results": 8
+   },
+   "27": {
+    "status": 0,
+    "parent_id": 9,
+    "id": 27,
+    "results": 8
+   },
+   "28": {
+    "status": 0,
+    "parent_id": 9,
+    "id": 28,
+    "results": 8
+   },
+   "29": {
+    "status": 0,
+    "parent_id": 9,
+    "id": 29,
+    "results": 8
+   },
+   "30": {
+    "status": 0,
+    "parent_id": 9,
+    "id": 30,
+    "results": 8
+   },
+   "31": {
+    "status": 0,
+    "parent_id": 31,
+    "id": 31,
+    "results": 1
+   },
+   "32": {
+    "status": 0,
+    "parent_id": 32,
+    "id": 32,
+    "results": 1
+   },
+   "33": {
+    "status": 0,
+    "parent_id": 33,
+    "id": 33,
+    "results": 1
+   },
+   "34": {
+    "status": 0,
+    "parent_id": 34,
+    "id": 34,
+    "results": 1
+   },
+   "341": {
+    "status": 0,
+    "parent_id": 341,
+    "id": 341,
+    "results": 1
+   },
+   "35": {
+    "status": 0,
+    "parent_id": 35,
+    "id": 35,
+    "results": 1
+   },
+   "36": {
+    "status": 0,
+    "parent_id": 36,
+    "id": 36,
+    "results": 1
+   },
+   "37": {
+    "status": 0,
+    "parent_id": 37,
+    "id": 37,
+    "results": 1
+   },
+   "371": {
+    "status": 0,
+    "parent_id": 371,
+    "id": 371,
+    "results": 1
+   },
+   "38": {
+    "status": 0,
+    "parent_id": 38,
+    "id": 38,
+    "results": 1
+   },
+   "39": {
+    "status": 0,
+    "parent_id": 39,
+    "id": 39,
+    "results": 1
+   },
+   "40": {
+    "status": 0,
+    "parent_id": 40,
+    "id": 40,
+    "results": 1
+   },
+   "41": {
+    "status": 0,
+    "parent_id": 41,
+    "id": 41,
+    "results": 1
+   },
+   "42": {
+    "status": 0,
+    "parent_id": 42,
+    "id": 42,
+    "results": 1
+   },
+   "43": {
+    "status": 0,
+    "parent_id": 43,
+    "id": 43,
+    "results": 1
+   },
+   "44": {
+    "status": 0,
+    "parent_id": 44,
+    "id": 44,
+    "results": 1
+   }
+  },
+  "search_depth": "128",
+  "minimum_similarity": 46.29,
+  "query_image_display": "/userdata/fgxm4rnNp.jpg.png",
+  "query_image": "fgxm4rnNp.jpg",
+  "results_returned": 5
+ },
+ "results": [
+  {
+   "header": {
+    "similarity": "45.29",
+    "thumbnail": "https://img3.saucenao.com/dA2/81827/818277413.jpg?auth=QqqoJYhYNk2kjgEnJxRckw&exp=1790708400",
+    "index_id": 34,
+    "index_name": "Index #34: deviantArt2 - 818277413.jpg",
+    "dupes": 0,
+    "hidden": 0
+   },
+   "data": {
+    "ext_urls": [
+     "https://deviantart.com/view/818277413"
+    ],
+    "title": "Dakimakura CyanPaint",
+    "da_id": "818277413",
+    "author_name": "wolfchen999",
+    "author_url": "https://www.deviantart.com/wolfchen999"
+   }
+  },
+  {
+   "header": {
+    "similarity": "45.07",
+    "thumbnail": "https://img1.saucenao.com/res/pixiv_historical/776/7765973_s.jpg?auth=gxEsbsyBW2_teI1Dk1Okyg&exp=1790708400",
+    "index_id": 6,
+    "index_name": "Index #6: Pixiv Historical - 7765973_s.jpg",
+    "dupes": 0,
+    "hidden": 0
+   },
+   "data": {
+    "ext_urls": [
+     "https://www.pixiv.net/member_illust.php?mode=medium&illust_id=7765973"
+    ],
+    "title": "オリジナルプリキュア娘ネタ。【捏造要注意】",
+    "pixiv_id": 7765973,
+    "member_name": "此花",
+    "member_id": 751197
+   }
+  },
+  {
+   "header": {
+    "similarity": "45.00",
+    "thumbnail": "https://img1.saucenao.com/res/pixiv/11084/manga/110846521_p1.jpg?auth=g40GigrkpExFmvdzN58Klw&exp=1790708400",
+    "index_id": 5,
+    "index_name": "Index #5: Pixiv Images - 110846521_p1.jpg",
+    "dupes": 0,
+    "hidden": 0
+   },
+   "data": {
+    "ext_urls": [
+     "https://www.pixiv.net/member_illust.php?mode=medium&illust_id=110846521"
+    ],
+    "title": "新しく始まる小説の主人公(２人目)です！",
+    "pixiv_id": 110846521,
+    "member_name": "武田楓",
+    "member_id": 89014007
+   }
+  },
+  {
+   "header": {
+    "similarity": "44.48",
+    "thumbnail": "https://img1.saucenao.com/res/pixiv/4606/manga/46062301_p32.jpg?auth=arykqumIczhVSNVoRoL8jQ&exp=1790708400",
+    "index_id": 5,
+    "index_name": "Index #5: Pixiv Images - 46062301_p32.jpg",
+    "dupes": 0,
+    "hidden": 0
+   },
+   "data": {
+    "ext_urls": [
+     "https://www.pixiv.net/member_illust.php?mode=medium&illust_id=46062301"
+    ],
+    "title": "キャラクター全身図＋",
+    "pixiv_id": 46062301,
+    "member_name": "はかる",
+    "member_id": 97232
+   }
+  },
+  {
+   "header": {
+    "similarity": "43.73",
+    "thumbnail": "https://img1.saucenao.com/res/pixiv/3374/33747012_s.jpg?auth=0nBxbYAVOz7re_g-o1R2zQ&exp=1790708400",
+    "index_id": 5,
+    "index_name": "Index #5: Pixiv Images - 33747012_s.jpg",
+    "dupes": 0,
+    "hidden": 0
+   },
+   "data": {
+    "ext_urls": [
+     "https://www.pixiv.net/member_illust.php?mode=medium&illust_id=33747012"
+    ],
+    "title": "寒い",
+    "pixiv_id": 33747012,
+    "member_name": "ビリケツ",
+    "member_id": 5067110
+   }
+  }
+ ]
+}
