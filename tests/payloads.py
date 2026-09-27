@@ -1,4 +1,4 @@
-"""Test data: constants, SauceNAO payloads, Telegram update builders (plain dicts)."""
+"""Test data: constants, SauceNAO and trace.moe payloads, Telegram update builders (plain dicts)."""
 
 import itertools
 import time
@@ -56,6 +56,35 @@ ANIME = result(
     year="1999-1999",
     est_time="00:12:33 / 00:24:40",
 )
+
+
+# --- trace.moe payloads ------------------------------------------------------
+
+
+def trace_response(results: list[dict], *, quota: int = 100, quota_used: int = 1) -> dict:
+    return {"frameCount": 745506, "error": "", "quota": quota, "quotaUsed": quota_used, "result": results}
+
+
+SCENE = {
+    "anilist": {
+        "id": 21034,
+        "idMal": 21273,
+        "title": {"native": "ご注文はうさぎですか？", "romaji": "Gochuumon wa Usagi Desu ka?", "english": "Is the Order a Rabbit?"},
+        "synonyms": ["GochiUsa"],
+        "isAdult": False,
+    },
+    "filename": "Gochuumon wa Usagi desu ka - 03 (BD 1280x720).mp4",
+    "episode": 3,
+    "episode_start": 3,
+    "episode_end": 3,
+    "duration": 1420.5,
+    "from": 725.25,
+    "to": 729.9,
+    "at": 727.0,
+    "similarity": 0.9612,
+    "video": "https://api.trace.moe/video/abc",
+    "image": "https://api.trace.moe/image/abc",
+}
 
 
 # --- Telegram updates --------------------------------------------------------
