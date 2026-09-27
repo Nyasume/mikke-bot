@@ -67,7 +67,7 @@ def trace_response(results: list[dict], *, quota: int = 100, quota_used: int = 1
 
 SCENE = {
     "anilist": {
-        "id": 21034,
+        "id": 20517,
         "idMal": 21273,
         "title": {"native": "ご注文はうさぎですか？", "romaji": "Gochuumon wa Usagi Desu ka?", "english": "Is the Order a Rabbit?"},
         "synonyms": ["GochiUsa"],
@@ -113,6 +113,18 @@ def message(chat: dict = PRIVATE, *, date: int | None = None, **fields: Any) -> 
 
 def update(msg: dict) -> dict:
     return {"update_id": next(_update_ids), "message": msg}
+
+
+def bot_answer(chat: dict, reply_to: dict | None, **fields: Any) -> dict:
+    """The bot's answer to a media message, which carries the 🎬 button."""
+    bot = {"id": 42, "is_bot": True, "first_name": "Mikke", "username": BOT_USERNAME}
+    replied = {"reply_to_message": reply_to} if reply_to else {}
+    return message(chat, text="<b>One Piece</b>", **{"from": bot}, **replied, **fields)
+
+
+def button_press(msg: dict, data: str = "scene", user: dict = USER) -> dict:
+    press = {"id": f"cb{next(_update_ids)}", "from": user, "chat_instance": "ci", "message": msg, "data": data}
+    return {"update_id": next(_update_ids), "callback_query": press}
 
 
 def telegram_file_error(token: str, path: str = "photos/file_1.jpg") -> aiohttp.ClientResponseError:

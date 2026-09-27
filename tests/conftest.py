@@ -1,4 +1,4 @@
-"""Offline test harness: a fake Telegram session; SauceNAO is mocked with respx in the tests."""
+"""Offline test harness: a fake Telegram session; SauceNAO and trace.moe are mocked with respx in the tests."""
 
 import itertools
 from collections.abc import AsyncGenerator
@@ -18,7 +18,9 @@ from mikke.bot import build_bot, build_dispatcher
 from mikke.config import Settings
 from mikke.reports import Reporter
 from mikke.saucenao import SauceNao
+from mikke.scenes import SceneSearcher
 from mikke.search import CACHE_SIZE, CACHE_TTL_SECONDS, Searcher
+from mikke.tracemoe import TraceMoe
 from payloads import ADMIN_ID, API_KEY, BOT_TOKEN, BOT_USERNAME, FAVOURITE_GROUP, IMAGE, PUBLIC_URL, Clock
 
 
@@ -80,6 +82,8 @@ class Harness:
     dp: Dispatcher
     searcher: Searcher
     saucenao: SauceNao
+    scenes: SceneSearcher
+    tracemoe: TraceMoe
     clock: Clock
 
     async def feed(self, update: dict) -> None:
@@ -118,8 +122,11 @@ def make_harness(http: httpx.AsyncClient):
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
         cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
         searcher = Searcher(saucenao, reporter, settings.public_url, cache=cache)
-        dp = build_dispatcher(settings, searcher, reporter)
-        return Harness(settings, session, bot, dp, searcher, saucenao, clock)
+        tracemoe = TraceMoe(http, clock=clock)
+        scene_cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
+        scenes = SceneSearcher(tracemoe, reporter, cache=scene_cache)
+        dp = build_dispatcher(settings, searcher, scenes, reporter)
+        return Harness(settings, session, bot, dp, searcher, saucenao, scenes, tracemoe, clock)
 
     return factory
 

@@ -12,6 +12,7 @@ from aiogram.types import TelegramObject
 from mikke.config import Settings
 from mikke.handlers import build_router, on_error
 from mikke.reports import Reporter
+from mikke.scenes import SceneSearcher
 from mikke.search import Searcher
 
 
@@ -56,8 +57,8 @@ class InFlight(BaseMiddleware):
             await asyncio.wait_for(self._idle.wait(), grace)
 
 
-def build_dispatcher(settings: Settings, searcher: Searcher, reporter: Reporter) -> Dispatcher:
-    dp = Dispatcher(searcher=searcher, reporter=reporter)
+def build_dispatcher(settings: Settings, searcher: Searcher, scenes: SceneSearcher, reporter: Reporter) -> Dispatcher:
+    dp = Dispatcher(searcher=searcher, scenes=scenes, reporter=reporter)
     dp["in_flight"] = in_flight = InFlight()
     dp.update.outer_middleware(in_flight)
     dp.include_router(build_router(settings.favourite_groups))

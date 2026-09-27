@@ -8,7 +8,16 @@ REQUIRED = {"BOT_TOKEN": "42:TEST", "SAUCENAO_API_KEY": "key"}
 
 @pytest.fixture
 def env(monkeypatch):
-    for name in ("ADMIN_IDS", "FAVOURITE_GROUPS", "BOT_MODE", "PUBLIC_URL", "WEBHOOK_SECRET", "REPORT_RESULTS", "REPORT_ERRORS"):
+    for name in (
+        "ADMIN_IDS",
+        "FAVOURITE_GROUPS",
+        "BOT_MODE",
+        "PUBLIC_URL",
+        "WEBHOOK_SECRET",
+        "REPORT_RESULTS",
+        "REPORT_ERRORS",
+        "TRACE_MOE_API_KEY",
+    ):
         monkeypatch.delenv(name, raising=False)
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
@@ -23,6 +32,17 @@ def test_defaults(env):
     assert settings.report_errors is True
     assert settings.bot_mode == "polling"
     assert (settings.web_host, settings.web_port) == ("0.0.0.0", 8080)
+    assert settings.trace_moe_api_key is None
+
+
+def test_trace_moe_api_key_is_optional(env, tmp_path):
+    env.setenv("TRACE_MOE_API_KEY", "sponsor-key")
+    assert Settings(_env_file=None).trace_moe_api_key.get_secret_value() == "sponsor-key"
+
+    env.delenv("TRACE_MOE_API_KEY")
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("TRACE_MOE_API_KEY=\n")
+    assert Settings(_env_file=dotenv).trace_moe_api_key is None
 
 
 def test_id_lists_are_comma_separated(env):

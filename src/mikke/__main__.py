@@ -11,7 +11,9 @@ from mikke.bot import InFlight, build_bot, build_dispatcher
 from mikke.config import Settings
 from mikke.reports import Reporter
 from mikke.saucenao import SauceNao
+from mikke.scenes import SceneSearcher
 from mikke.search import Searcher
+from mikke.tracemoe import TraceMoe
 from mikke.web import build_app
 
 logger = logging.getLogger(__name__)
@@ -48,7 +50,9 @@ async def run(settings: Settings) -> None:
         saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value())
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
         searcher = Searcher(saucenao, reporter, settings.public_url)
-        dp = build_dispatcher(settings, searcher, reporter)
+        trace_key = settings.trace_moe_api_key.get_secret_value() if settings.trace_moe_api_key else None
+        scenes = SceneSearcher(TraceMoe(http, trace_key), reporter)
+        dp = build_dispatcher(settings, searcher, scenes, reporter)
 
         webhook = settings.bot_mode == "webhook"
         secret = settings.webhook_secret.get_secret_value() if webhook and settings.webhook_secret else None
@@ -91,6 +95,7 @@ def main() -> None:
                 settings.bot_token.get_secret_value(),
                 settings.saucenao_api_key.get_secret_value(),
                 settings.webhook_secret.get_secret_value() if settings.webhook_secret else "",
+                settings.trace_moe_api_key.get_secret_value() if settings.trace_moe_api_key else "",
             ],
         )
     )

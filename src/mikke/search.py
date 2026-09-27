@@ -25,6 +25,8 @@ CACHE_TTL_SECONDS = 24 * 60 * 60
 class Answer:
     text: str
     keyboard: InlineKeyboardMarkup | None = None
+    # Telegram would not give us the file, so searching it elsewhere is pointless too
+    invalid_file: bool = False
 
 
 class InvalidFileError(Exception):
@@ -33,6 +35,22 @@ class InvalidFileError(Exception):
 
 class DownloadError(Exception):
     """Downloading the file from Telegram failed."""
+
+
+async def download(bot: Bot, media: Media) -> tuple[bytes, str]:
+    """The image to search and its file name, fetched from Telegram."""
+    try:
+        file = await bot.get_file(media.file_id)
+        if not file.file_path:
+            raise InvalidFileError("no file_path")
+        data = await bot.download_file(file.file_path)
+    except TelegramBadRequest as e:
+        raise InvalidFileError(e.message) from e
+    except (aiohttp.ClientError, TimeoutError) as e:
+        # the aiohttp error text holds the file URL, bot token included: drop it
+        status = getattr(e, "status", None)
+        raise DownloadError(f"{type(e).__name__}{f' HTTP {status}' if status else ''}") from None
+    return data.getvalue(), PurePosixPath(file.file_path).name
 
 
 class Searcher:
@@ -61,18 +79,8 @@ class Searcher:
         async def query() -> list[dict]:
             # no point in downloading the file while the API is off limits
             self._saucenao.check_quota()
-            try:
-                file = await bot.get_file(media.file_id)
-                if not file.file_path:
-                    raise InvalidFileError("no file_path")
-                data = await bot.download_file(file.file_path)
-            except TelegramBadRequest as e:
-                raise InvalidFileError(e.message) from e
-            except (aiohttp.ClientError, TimeoutError) as e:
-                # the aiohttp error text holds the file URL, bot token included: drop it
-                status = getattr(e, "status", None)
-                raise DownloadError(f"{type(e).__name__}{f' HTTP {status}' if status else ''}") from None
-            return await self._saucenao.search(image=data.getvalue(), filename=PurePosixPath(file.file_path).name)
+            image, filename = await download(bot, media)
+            return await self._saucenao.search(image=image, filename=filename)
 
         return await self._search(bot, media.file_unique_id, self.image_url(media.file_id), media, query)
 
@@ -95,7 +103,7 @@ class Searcher:
                 return Answer(texts.LIMIT_REACHED, fallback_keyboard(image_url))
             except InvalidFileError as e:
                 logger.info("Invalid file %s: %s", key, e)
-                return Answer(texts.INVALID_FILE)
+                return Answer(texts.INVALID_FILE, invalid_file=True)
             except Exception as e:
                 logger.exception("Search failed for %s", key)
                 await self._reporter.error(bot, f"Search failed for {image_url or key}\n{type(e).__name__}: {e}")

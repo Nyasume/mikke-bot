@@ -8,6 +8,8 @@ Mikke (みっけ, "found it!") is a Telegram bot, [@reverseSearch2Bot](https://t
 
 When nothing is found, or the SauceNAO limit is reached, Mikke links the image to Google Lens, Yandex, Bing, SauceNAO, ascii2d and TinEye instead.
 
+Answers in chats also carry a 🎬 **Anime scene** button. It asks [trace.moe](https://trace.moe) for the anime, episode and moment of the picture and replies with the titles, the time range, the similarity and AniList / MyAnimeList links. It runs only when someone presses it: trace.moe gives a guest 100 searches a day, one at a time (`TRACE_MOE_API_KEY` raises that for sponsors).
+
 ## Running
 
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.13.
@@ -33,7 +35,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-Tests are offline: Telegram is replaced by a fake session and SauceNAO is mocked with respx.
+Tests are offline: Telegram is replaced by a fake session, SauceNAO and trace.moe are mocked with respx.
 
 ## Credits
 

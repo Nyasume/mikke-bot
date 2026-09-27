@@ -16,6 +16,8 @@ class Settings(BaseSettings):
 
     bot_token: SecretStr
     saucenao_api_key: SecretStr
+    # A trace.moe sponsor's key for a higher quota; without it the anime scene search runs as a guest
+    trace_moe_api_key: SecretStr | None = None
 
     # Owner reports: every found result with the searched image, and every error
     admin_ids: Annotated[list[int], NoDecode] = []

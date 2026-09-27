@@ -2,10 +2,11 @@ import time
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.methods import AnswerInlineQuery, EditMessageText, GetFile, SendMessage
+from aiogram.methods import AnswerCallbackQuery, AnswerInlineQuery, EditMessageText, GetFile, SendMessage
 
 from mikke import texts
 from mikke.saucenao import SEARCH_URL
+from mikke.tracemoe import SEARCH_URL as TRACE_URL
 from payloads import (
     ADMIN_ID,
     ANIME,
@@ -15,9 +16,13 @@ from payloads import (
     GROUP,
     PHOTO,
     PRIVATE,
+    SCENE,
     USER,
+    bot_answer,
+    button_press,
     message,
     sauce_response,
+    trace_response,
     update,
 )
 
@@ -44,6 +49,10 @@ def _sent(harness) -> list[SendMessage]:
 
 def _searched_file_ids(harness) -> list[str]:
     return [call.file_id for call in harness.session.calls(GetFile)]
+
+
+def _layout(markup) -> list[list[str]]:
+    return [[button.text for button in row] for row in markup.inline_keyboard]
 
 
 async def test_private_photo_is_searched_via_placeholder(harness, found):
@@ -219,24 +228,23 @@ async def test_inline_non_url_query_gets_no_results(harness, query):
     assert answer.results == []
 
 
+def _chosen_inline_result(query: str) -> dict:
+    return {
+        "update_id": 901,
+        "chosen_inline_result": {"result_id": "url", "from": USER, "query": query, "inline_message_id": "inline-42"},
+    }
+
+
 async def test_chosen_inline_result_searches_the_url_and_edits_the_inline_message(harness, respx_mock):
     route = respx_mock.get(SEARCH_URL).respond(json=sauce_response([ANIME]))
-    await harness.feed(
-        {
-            "update_id": 901,
-            "chosen_inline_result": {
-                "result_id": "url",
-                "from": USER,
-                "query": "example.com/pic.jpg",
-                "inline_message_id": "inline-42",
-            },
-        }
-    )
+    await harness.feed(_chosen_inline_result("example.com/pic.jpg"))
 
     assert route.calls.last.request.url.params["url"] == "https://example.com/pic.jpg"
     [edit] = harness.session.calls(EditMessageText)
     assert edit.inline_message_id == "inline-42"
     assert edit.text.startswith("<b>One Piece (Ep. 12)</b>")
+    # trace.moe is for chats only
+    assert _layout(edit.reply_markup) == [["View on AniDB", "MAL", "AniList"]]
 
 
 async def test_flood_protection_ignores_more_than_20_messages_in_3_seconds(harness, found):
@@ -289,7 +297,7 @@ async def test_error_report_hides_the_token(harness, found):
     assert "/file/bot&lt;token&gt;/x.jpg" in report.text
 
 
-async def test_rejected_buttons_fall_back_to_the_text_alone(harness, found):
+async def test_rejected_link_buttons_fall_back_to_the_text_and_the_scene_button(harness, found):
     harness.session.fail_once[EditMessageText] = TelegramBadRequest(
         method=EditMessageText(text="x"), message="Bad Request: BUTTON_URL_INVALID"
     )
@@ -297,9 +305,22 @@ async def test_rejected_buttons_fall_back_to_the_text_alone(harness, found):
     await harness.feed(update(message(photo=PHOTO)))
 
     first, second = harness.session.calls(EditMessageText)
+    assert _layout(first.reply_markup) == [["View on AniDB", "MAL", "AniList"], ["🎬 Anime scene"]]
+    assert _layout(second.reply_markup) == [["🎬 Anime scene"]]
+    assert second.text == first.text
+
+
+async def test_rejected_buttons_on_an_inline_answer_fall_back_to_the_text_alone(harness, respx_mock):
+    respx_mock.get(SEARCH_URL).respond(json=sauce_response([ANIME]))
+    harness.session.fail_once[EditMessageText] = TelegramBadRequest(
+        method=EditMessageText(text="x"), message="Bad Request: BUTTON_URL_INVALID"
+    )
+
+    await harness.feed(_chosen_inline_result("example.com/pic.jpg"))
+
+    first, second = harness.session.calls(EditMessageText)
     assert first.reply_markup is not None
     assert second.reply_markup is None
-    assert second.text == first.text
 
 
 async def test_rate_limited_edit_is_retried(harness, found):
@@ -311,3 +332,160 @@ async def test_rate_limited_edit_is_retried(harness, found):
 
     first, second = harness.session.calls(EditMessageText)
     assert second.reply_markup == first.reply_markup
+
+
+# --- 🎬 Anime scene -------------------------------------------------------------
+
+SCENE_ROW = ["🎬 Anime scene"]
+QUOTA_DEPLETED = {"quota": 100, "quotaUsed": 100, "error": "Search quota depleted (quota per 24 hours: 100, used: 100)"}
+
+
+@pytest.fixture
+def scene_found(respx_mock):
+    return respx_mock.post(TRACE_URL).respond(json=trace_response([SCENE]))
+
+
+@pytest.mark.parametrize(
+    ("response", "text", "first_row"),
+    [
+        ({"json": sauce_response([ANIME])}, "<b>One Piece (Ep. 12)</b>", ["View on AniDB", "MAL", "AniList"]),
+        ({"json": sauce_response([])}, texts.NO_RESULT, ["Google Lens", "Yandex", "Bing"]),
+        ({"status_code": 429}, texts.LIMIT_REACHED, ["Google Lens", "Yandex", "Bing"]),
+        ({"status_code": 500}, texts.ERROR, ["Google Lens", "Yandex", "Bing"]),
+    ],
+    ids=["result", "no-result", "limit", "error"],
+)
+async def test_chat_answers_end_with_the_scene_button(harness, respx_mock, response, text, first_row):
+    respx_mock.post(SEARCH_URL).respond(**response)
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    [edit] = harness.session.calls(EditMessageText)
+    assert edit.text.startswith(text)
+    layout = _layout(edit.reply_markup)
+    assert layout[0] == first_row
+    assert layout[-1] == SCENE_ROW
+    assert edit.reply_markup.inline_keyboard[-1][0].callback_data == "scene"
+
+
+async def test_file_telegram_refuses_gets_no_scene_button(harness, found):
+    harness.session.errors[GetFile] = TelegramBadRequest(method=GetFile(file_id="x"), message="file is too big")
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    [edit] = harness.session.calls(EditMessageText)
+    assert edit.text == texts.INVALID_FILE
+    assert edit.reply_markup is None
+
+
+async def test_scene_press_searches_the_replied_media_and_replies_to_it(harness, scene_found):
+    media_msg = message(GROUP, photo=PHOTO)
+    await harness.feed(button_press(bot_answer(GROUP, media_msg)))
+
+    assert _searched_file_ids(harness) == ["photo-large-id"]
+    request = scene_found.calls.last.request
+    assert BOT_TOKEN.encode() not in request.content
+    assert BOT_TOKEN not in str(request.url)
+
+    [reply] = _sent(harness)
+    assert (reply.chat_id, reply.reply_parameters.message_id) == (GROUP["id"], media_msg["message_id"])
+    assert reply.text.startswith("🎬 <b>Is the Order a Rabbit?</b>\n<i>Gochuumon wa Usagi Desu ka?</i>")
+    assert _layout(reply.reply_markup) == [["AniList", "MyAnimeList"]]
+    [answer] = harness.session.calls(AnswerCallbackQuery)
+    assert (answer.text, answer.show_alert) == (None, False)
+
+
+async def test_scene_press_on_a_video_searches_its_thumbnail(harness, scene_found):
+    video = {"file_id": "video-id", "file_unique_id": "video-u", "width": 1, "height": 1, "duration": 5, "thumbnail": THUMB}
+    await harness.feed(button_press(bot_answer(PRIVATE, message(video=video))))
+
+    assert _searched_file_ids(harness) == ["thumb-id"]
+    assert scene_found.call_count == 1
+
+
+async def test_scene_results_are_cached_per_file(harness, scene_found):
+    media_msg = message(GROUP, photo=PHOTO)
+    await harness.feed(button_press(bot_answer(GROUP, media_msg)))
+    # the same picture forwarded again, answered in another message
+    await harness.feed(button_press(bot_answer(GROUP, message(GROUP, photo=PHOTO))))
+
+    assert scene_found.call_count == 1
+    assert len(harness.session.calls(GetFile)) == 1
+    first, second = _sent(harness)
+    assert second.text == first.text
+
+
+async def test_scene_press_without_the_media_gets_an_alert(harness, scene_found):
+    await harness.feed(button_press(bot_answer(GROUP, None)))
+
+    [answer] = harness.session.calls(AnswerCallbackQuery)
+    assert (answer.text, answer.show_alert) == (texts.SCENE_NO_MEDIA, True)
+    assert scene_found.call_count == 0
+    assert _sent(harness) == []
+
+
+async def test_scene_quota_used_up_gets_an_alert_and_no_more_api_calls(harness, respx_mock):
+    route = respx_mock.post(TRACE_URL).respond(402, json=QUOTA_DEPLETED)
+
+    await harness.feed(button_press(bot_answer(GROUP, message(GROUP, photo=PHOTO))))
+    requests_before = len(harness.session.requests)
+    await harness.feed(button_press(bot_answer(GROUP, message(GROUP, sticker=STATIC_STICKER))))
+
+    first, second = harness.session.calls(AnswerCallbackQuery)
+    assert (first.text, first.show_alert) == (texts.SCENE_LIMIT, True)
+    assert (second.text, second.show_alert) == (texts.SCENE_LIMIT, True)
+    assert route.call_count == 1
+    # the second press did not even download the file
+    assert len(harness.session.requests) == requests_before + 1
+    assert _sent(harness) == []
+
+
+async def test_scene_error_gets_an_alert_and_is_reported(harness, respx_mock):
+    respx_mock.post(TRACE_URL).respond(503, json={"error": "Error: Search queue is full"})
+
+    await harness.feed(button_press(bot_answer(GROUP, message(GROUP, photo=PHOTO))))
+
+    [answer] = harness.session.calls(AnswerCallbackQuery)
+    assert (answer.text, answer.show_alert) == (texts.SCENE_ERROR, True)
+    [report] = _sent(harness)
+    assert report.chat_id == ADMIN_ID
+    assert "TraceMoeError: HTTP 503: Error: Search queue is full" in report.text
+
+
+async def test_scene_error_is_not_cached(harness, respx_mock):
+    respx_mock.post(TRACE_URL).respond(500, text="boom")
+    await harness.feed(button_press(bot_answer(PRIVATE, message(photo=PHOTO))))
+
+    route = respx_mock.post(TRACE_URL).respond(json=trace_response([SCENE]))
+    await harness.feed(button_press(bot_answer(PRIVATE, message(photo=PHOTO))))
+
+    assert route.call_count == 2
+    assert _sent(harness)[-1].text.startswith("🎬 <b>Is the Order a Rabbit?</b>")
+
+
+async def test_scene_answer_after_telegram_stopped_waiting_is_not_an_error(harness, scene_found):
+    harness.session.errors[AnswerCallbackQuery] = TelegramBadRequest(
+        method=AnswerCallbackQuery(callback_query_id="x"), message="Bad Request: query is too old"
+    )
+
+    await harness.feed(button_press(bot_answer(PRIVATE, message(photo=PHOTO))))
+
+    # the scene reply went out and nothing was reported to the owner
+    [reply] = _sent(harness)
+    assert reply.chat_id == PRIVATE["id"]
+
+
+async def test_other_buttons_do_not_search(harness, scene_found):
+    await harness.feed(button_press(bot_answer(PRIVATE, message(photo=PHOTO)), data="noop"))
+
+    assert scene_found.call_count == 0
+    assert harness.session.requests == []
+
+
+async def test_flood_protection_limits_scene_presses_harder(harness, scene_found):
+    answer = bot_answer(PRIVATE, message(photo=PHOTO))
+    for _ in range(6):
+        await harness.feed(button_press(answer))
+
+    assert len(harness.session.calls(AnswerCallbackQuery)) == 5
+    assert scene_found.call_count == 1
