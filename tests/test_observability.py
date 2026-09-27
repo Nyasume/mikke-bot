@@ -14,7 +14,7 @@ from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 
 from mikke import texts
-from mikke.config import Settings
+from mikke.config import Settings, derive_secret
 from mikke.observability import FILTERED, Scrubber, init_sentry
 from mikke.saucenao import SEARCH_URL, QuotaExceededError
 from mikke.tracemoe import SEARCH_URL as TRACE_URL
@@ -24,7 +24,9 @@ from payloads import (
     ANIME,
     API_KEY,
     BOT_TOKEN,
+    BOT_USERNAME,
     EXTRA_BOT_TOKEN,
+    EXTRA_BOT_USERNAME,
     PHOTO,
     bot_answer,
     button_press,
@@ -201,6 +203,27 @@ async def test_secrets_never_reach_sentry(sentry, caplog):
     assert FILTERED in event["exception"]["values"][0]["value"]
 
 
+async def test_every_bots_token_and_webhook_secret_is_filtered(sentry, caplog):
+    _, transport = sentry(extra_bot_tokens=[EXTRA_BOT_TOKEN])
+    extra_secret = derive_secret(WEBHOOK_SECRET, 43)
+    secrets = [*SECRETS, EXTRA_BOT_TOKEN, extra_secret]
+    log = logging.getLogger("mikke.test")
+    sentry_sdk.add_breadcrumb(category="headers", data={"X-Telegram-Bot-Api-Secret-Token": extra_secret})
+    # shaped so that only the given secrets, not the token pattern, can catch them
+    text = " ".join(f"{secret} {quote(secret, safe='')}" for secret in secrets)
+
+    try:
+        raise RuntimeError(text)
+    except RuntimeError:
+        log.exception("failed: %s", text)
+
+    [event] = transport.events
+    assert FILTERED in event["exception"]["values"][0]["value"]
+    for secret in secrets:
+        assert secret not in transport.sent
+        assert quote(secret, safe="") not in transport.sent
+
+
 async def test_searches_leave_no_api_key_in_the_breadcrumbs(sentry, respx_mock):
     harness, transport = sentry()
     respx_mock.post(SEARCH_URL).respond(500, text="Internal Server Error")
@@ -259,6 +282,47 @@ async def test_handler_error_is_sent_once_with_numeric_ids_only(sentry, found):
         assert private not in transport.sent
     # the owner still gets the report
     assert _sent(harness)[-1].chat_id == ADMIN_ID
+
+
+@pytest.mark.parametrize(("receiver", "username"), [(0, BOT_USERNAME), (1, EXTRA_BOT_USERNAME)])
+async def test_events_name_the_bot_that_received_the_update(sentry, found, respx_mock, receiver, username):
+    harness, transport = sentry(extra_bot_tokens=[EXTRA_BOT_TOKEN])
+    bot = harness.bots[receiver]
+    harness.sessions[receiver].fail_once[EditMessageText] = RuntimeError("telegram exploded")
+
+    await harness.feed(_photo(), bot)  # the error handler's event
+    respx_mock.post(SEARCH_URL).respond(500, text="boom")
+    await harness.feed(update(message(photo=[{**PHOTO[1], "file_unique_id": "other-u"}])), bot)  # a searcher's
+
+    handler_error, search_error = transport.events
+    assert handler_error["tags"] == {"bot": username, "update_type": "message"}
+    assert search_error["logentry"]["message"].startswith("Search failed")
+    assert search_error["tags"] == {"bot": username}
+    # nothing is left over outside the update
+    sentry_sdk.capture_message("later")
+    assert "bot" not in transport.events[-1].get("tags", {})
+
+
+@pytest.mark.parametrize(
+    ("path", "receiver", "username"),
+    [("/img/43/photo-file-id", 1, EXTRA_BOT_USERNAME), ("/img/photo-file-id", 0, BOT_USERNAME)],
+)
+async def test_img_route_errors_name_the_bot(sentry, monkeypatch, path, receiver, username):
+    harness, transport = sentry(extra_bot_tokens=[EXTRA_BOT_TOKEN])
+
+    async def broken_get_file(file_id):
+        raise RuntimeError("getFile exploded")
+
+    monkeypatch.setattr(harness.bots[receiver], "get_file", broken_get_file)
+    client = await _client(harness)
+    try:
+        response = await client.get(path)
+    finally:
+        await client.close()
+
+    assert response.status == 500
+    [event] = transport.events
+    assert event["tags"]["bot"] == username
 
 
 async def test_img_route_error_is_sent_once(sentry, monkeypatch):

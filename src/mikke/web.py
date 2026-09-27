@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 import aiohttp
+import sentry_sdk
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler
@@ -72,6 +73,8 @@ def build_app(bots: list[Bot], dp: Dispatcher, webhook_secret: str | None = None
         bot = by_id.get(int(request.match_info["bot_id"])) if "bot_id" in request.match_info else bots[0]
         if bot is None or not FILE_ID_RE.fullmatch(file_id):
             raise web.HTTPNotFound
+        # the request's scope: the aiohttp integration sends route errors after this handler has returned
+        sentry_sdk.set_tag("bot", (await bot.me()).username)
         try:
             file = await bot.get_file(file_id)
         except TelegramAPIError as e:

@@ -25,7 +25,10 @@ from payloads import ADMIN_ID, API_KEY, BOT_TOKEN, FAVOURITE_GROUP, IMAGE, PUBLI
 
 
 class FakeSession(BaseSession):
-    """Records every Bot API call and answers with plausible objects. Each bot has its own."""
+    """Records every Bot API call and answers with plausible objects. Each bot has its own.
+
+    getMe is answered but not recorded: aiogram caches it, and run() asks for it before any update.
+    """
 
     def __init__(self) -> None:
         super().__init__()
@@ -43,13 +46,13 @@ class FakeSession(BaseSession):
         pass
 
     async def make_request(self, bot: Bot, method: TelegramMethod, timeout: int | None = None) -> Any:  # noqa: ASYNC109
+        if isinstance(method, GetMe):
+            return User(id=bot.id, is_bot=True, first_name="Mikke", username=USERNAMES[bot.id])
         self.requests.append(method)
         if (error := self.errors.get(type(method)) or self.fail_once.pop(type(method), None)) is not None:
             raise error
         if (error := self.chat_errors.get(getattr(method, "chat_id", None))) is not None:
             raise error
-        if isinstance(method, GetMe):
-            return User(id=bot.id, is_bot=True, first_name="Mikke", username=USERNAMES[bot.id])
         if isinstance(method, GetFile):
             path = self.file_paths.get(method.file_id, f"photos/{method.file_id}.jpg")
             return File(file_id=method.file_id, file_unique_id=f"u-{method.file_id}", file_path=path)

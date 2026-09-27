@@ -12,15 +12,20 @@ Each unexpected error reaches Sentry once:
 - anything else logged at ERROR, like `logger.exception` in the searchers.
 Expected situations (`is_expected`) are logged at INFO or WARNING, and dropped
 here too in case one is ever logged as an error.
+
+Events carry the `bot` tag, the username of the bot that received the update
+or serves the /img/ link (`tag_bot`, and the /img/ route itself).
 """
 
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 from urllib.parse import quote
 
 import sentry_sdk
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
+from aiogram.types import TelegramObject
 from sentry_sdk.integrations.aiohttp import AioHttpIntegration
 from sentry_sdk.integrations.asyncio import AsyncioIntegration
 from sentry_sdk.integrations.logging import LoggingIntegration
@@ -65,6 +70,18 @@ def is_expected(error: BaseException) -> bool:
     return isinstance(error, TelegramBadRequest) and any(
         text in error.message.lower() for text in EXPECTED_BAD_REQUESTS
     )
+
+
+async def tag_bot(
+    handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+    event: TelegramObject,
+    data: dict[str, Any],
+) -> Any:
+    """Outer middleware for updates and errors: events sent while handling one name the bot that received it."""
+    with sentry_sdk.new_scope() as scope:
+        # getMe is cached: run() asks every bot for it at startup
+        scope.set_tag("bot", (await data["bot"].me()).username)
+        return await handler(event, data)
 
 
 class Scrubber:

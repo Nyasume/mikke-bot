@@ -11,6 +11,7 @@ from aiogram.types import TelegramObject
 
 from mikke.config import Settings
 from mikke.handlers import build_router, on_error
+from mikke.observability import tag_bot
 from mikke.reports import Reporter
 from mikke.scenes import SceneSearcher
 from mikke.search import Searcher
@@ -62,6 +63,9 @@ def build_dispatcher(settings: Settings, searcher: Searcher, scenes: SceneSearch
     dp = Dispatcher(searcher=searcher, scenes=scenes, reporter=reporter)
     dp["in_flight"] = in_flight = InFlight()
     dp.update.outer_middleware(in_flight)
+    # the bot's username on Sentry events; aiogram runs the error handler outside the update middlewares
+    dp.update.outer_middleware(tag_bot)
+    dp.errors.outer_middleware(tag_bot)
     dp.include_router(build_router(settings.favourite_groups))
     dp.errors.register(on_error)
     return dp
