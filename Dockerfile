@@ -26,6 +26,9 @@ ENV PYTHONUNBUFFERED=1 \
 RUN useradd --system --no-create-home --uid 10001 bot
 COPY --from=builder /app/.venv /app/.venv
 USER bot
+# mikke-bot@<commit sha> from CI: the release of Sentry events. Built without it, events have none.
+ARG SENTRY_RELEASE
+ENV SENTRY_RELEASE=$SENTRY_RELEASE
 
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

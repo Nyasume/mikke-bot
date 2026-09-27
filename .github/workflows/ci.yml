@@ -54,6 +54,7 @@ jobs:
       - uses: docker/build-push-action@v7
         with:
           push: true
+          build-args: SENTRY_RELEASE=mikke-bot@${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
