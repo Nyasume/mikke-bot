@@ -1,10 +1,10 @@
-# Production: ~/BOTS/mikke/ on skrime-vps, next to a .env made from .env.example.
-# Traefik (file provider) routes https://anybyte.org/telebot/rsbot -> mikke:8080 with the
-# /telebot/rsbot prefix stripped, so no ports are published here.
+# Production: ~/BOTS/mikke/ on skrime-vps, next to a .env made from .env.example and deploy.sh.
+# GitHub Actions builds the image into GHCR; deploy.sh pulls it and restarts the service.
+# Traefik (file provider) routes https://anybyte.org/telebot/mikke -> mikke:8080 with the
+# /telebot/mikke prefix stripped, so no ports are published here.
 services:
   mikke:
-    build: .
-    image: mikke:latest
+    image: ghcr.io/nyasume/mikke-bot:latest
     container_name: mikke
     restart: unless-stopped
     env_file: .env

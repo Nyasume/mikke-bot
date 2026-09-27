@@ -1,5 +1,7 @@
 # Mikke
 
+<p align="center"><img src="assets/mikke.png" width="320" alt="Mikke, a chibi anime girl detective with pink twin tails holding up a magnifying glass"></p>
+
 Mikke (みっけ, "found it!") is a Telegram bot, [@reverseSearch2Bot](https://t.me/reverseSearch2Bot), who finds where pictures come from. Show her an image, a sticker, a GIF or a video and she answers with the source: title, characters, artist, anime episode and timestamp, with links to the sites she found it on. Searches go to [SauceNAO](https://saucenao.com).
 
 - Private chat: send a picture, a sticker, an image file, a GIF or a video.
@@ -20,7 +22,7 @@ uv sync
 uv run mikke
 ```
 
-`BOT_MODE=polling` (the default) is for local runs. Production runs `BOT_MODE=webhook` in Docker (`docker compose up -d --build`); see `.env.example` for all settings.
+`BOT_MODE=polling` (the default) is for local runs. Production runs `BOT_MODE=webhook` in Docker: GitHub Actions tests every push, builds `main` into `ghcr.io/nyasume/mikke-bot`, and deploys when the CI workflow is run by hand with `deploy` checked. See `.env.example` for all settings.
 
 The bot's HTTP server (port 8080) serves:
 

@@ -67,12 +67,13 @@ Package `src/mikke/`:
 
 ## Production
 
-- Server `skrime-vps` (SSH alias), compose project `~/BOTS/mikke/`, service and container `mikke` (image `mikke:latest`) in the external Docker network `bots-network`, internal port 8080. `docker-compose.yml` in this repo is that compose file (`BOT_MODE=webhook`, no published ports, `.env` next to it).
-- Traefik behind Cloudflare: `https://anybyte.org/telebot/rsbot` → `mikke:8080` with the `/telebot/rsbot` prefix stripped, so the bot sees `/`. `PUBLIC_URL=https://anybyte.org/telebot/rsbot`, so the webhook is `https://anybyte.org/telebot/rsbot/` and images are `https://anybyte.org/telebot/rsbot/img/<file_id>` over the same route. The bot registers the webhook with `WEBHOOK_SECRET` itself on start.
-- The rename to Mikke changed the deployment plan, which used to be `~/BOTS/reverseSearchBot/` and container `rsbot`: the Traefik service URL has to point at `mikke:8080` instead of `rsbot:8080`. The public path `/telebot/rsbot` stays, so `PUBLIC_URL` and the webhook URL do not change. The display name is set once by hand: `setMyName` "Mikke" (or BotFather `/setname`).
-- Still deployed for the old bot: `https://anybyte.org/rsbotphp` → `nginx:6004` (php tokenHider) and its php container. The rewrite does not use them; after the switch the Traefik route, the php container and the nginx `:6004` server block can be removed.
-- Secrets (bot token, SauceNAO key, admin ids, webhook secret) never go into git.
-- Do not touch the server or the production bot, and do not call Telegram with the production token, unless the user asks. Deployment is a separate step the user drives.
+- Server `skrime-vps` (SSH alias), compose project `~/BOTS/mikke/` (`docker-compose.yml` = the one in this repo, `.env` 600, `deploy.sh`), service and container `mikke` in the external Docker network `bots-network`, internal port 8080, image `ghcr.io/nyasume/mikke-bot:latest`.
+- Traefik behind Cloudflare, `~/traefik/config/mikke.yml`: `https://anybyte.org/telebot/mikke` → `mikke:8080` with the `/telebot/mikke` prefix stripped, so the bot sees `/`. `PUBLIC_URL=https://anybyte.org/telebot/mikke`: the webhook is `https://anybyte.org/telebot/mikke/` and images are `https://anybyte.org/telebot/mikke/img/<file_id>` over the same route. The bot registers the webhook with `WEBHOOK_SECRET` itself on start.
+- CI/CD, `.github/workflows/ci.yml`: ruff and pytest on every push and PR; pushes to `main` build and push `ghcr.io/nyasume/mikke-bot` (`latest` + `sha-<short>`); deploy only when the workflow is run by hand (Actions → CI → Run workflow, `deploy` checked), mirroring the manual deploy of the GitLab bots. The deploy job SSHes with a key that `~/.ssh/authorized_keys` pins to `restrict,command="/home/anybyte/BOTS/mikke/deploy.sh"`, so it can only pull and restart the bot; the job's `GITHUB_TOKEN` goes over stdin for the GHCR pull, into a throwaway `DOCKER_CONFIG` deleted on exit. Repo secrets: `SSH_PRIVATE_KEY`, `SSH_KNOWN_HOSTS`, `SSH_HOST`, `SSH_USER`. `deploy.sh` and the server's compose file are not deployed by CI; change them on the server by hand.
+- Bot profile (display name "Mikke", descriptions, commands) is set through the Bot API (`setMyName`, `setMyDescription`, `setMyShortDescription`, `setMyCommands`); the avatar through BotFather `/setuserpic`. The bot is owned by the user's second Telegram account.
+- The old Node.js bot (`~/BOTS/reverseSearchBot/`, container `rsbot`, Traefik `/telebot/rsbot` and `/rsbotphp`, the php container and the nginx `:6004` block) was replaced by Mikke on 2026-09-27.
+- Secrets (bot token, SauceNAO key, admin ids, webhook secret, trace.moe key) never go into git.
+- Do not touch the server or the production bot, and do not call Telegram with the production token, unless the user asks.
 
 ## Git and license
 
