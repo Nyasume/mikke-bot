@@ -6,6 +6,7 @@ from aiogram.methods import AnswerInlineQuery, EditMessageText, GetFile, SendMes
 from payloads import (
     ADMIN_ID,
     ANIME,
+    BOT_TOKEN,
     BOT_USERNAME,
     FAV_GROUP,
     GROUP,
@@ -274,3 +275,14 @@ async def test_error_reports_can_be_switched_off(make_harness, found):
     await harness.feed(update(message(photo=PHOTO)))
 
     assert [call.chat_id for call in _sent(harness)] == [PRIVATE["id"]]
+
+
+async def test_error_report_hides_the_token(harness, found):
+    harness.session.errors[EditMessageText] = RuntimeError(f"GET https://api.telegram.org/file/bot{BOT_TOKEN}/x.jpg")
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    report = _sent(harness)[-1]
+    assert BOT_TOKEN not in report.text
+    assert "/file/bot&lt;token&gt;/x.jpg" in report.text
+

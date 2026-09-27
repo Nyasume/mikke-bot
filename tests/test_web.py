@@ -6,7 +6,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import GetFile, SendMessage
 from aiohttp import test_utils
 
-from payloads import BOT_TOKEN, IMAGE, message, update
+from payloads import BOT_TOKEN, IMAGE, message, telegram_file_error, update
 from reverse_search_bot import texts
 from reverse_search_bot.web import build_app
 
@@ -124,3 +124,23 @@ async def test_img_download_failure_is_502(client, harness, monkeypatch):
     monkeypatch.setattr(harness.session, "stream_content", broken_stream)
     response = await client.get("/img/photo-file-id")
     assert response.status == 502
+
+
+async def test_img_head_does_not_download(client, harness):
+    response = await client.head("/img/photo-file-id")
+    assert response.status == 200
+    assert response.headers["Content-Type"] == "image/jpeg"
+    assert harness.session.streamed == []
+
+
+async def test_img_download_failure_does_not_log_the_token(client, harness, monkeypatch, caplog):
+    async def failing_stream(*args, **kwargs):
+        raise telegram_file_error(BOT_TOKEN)
+        yield b""  # pragma: no cover
+
+    monkeypatch.setattr(harness.session, "stream_content", failing_stream)
+    response = await client.get("/img/photo-file-id")
+
+    assert response.status == 502
+    assert BOT_TOKEN not in caplog.text
+    assert BOT_TOKEN not in await response.text()

@@ -16,6 +16,19 @@ from reverse_search_bot.web import build_app
 
 logger = logging.getLogger(__name__)
 
+class RedactingFormatter(logging.Formatter):
+    """Keeps secrets out of the logs, tracebacks included (aiohttp errors quote Telegram file URLs)."""
+
+    def __init__(self, fmt: str, secrets: list[str]) -> None:
+        super().__init__(fmt)
+        self._secrets = [secret for secret in secrets if secret]
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        for secret in self._secrets:
+            text = text.replace(secret, "<redacted>")
+        return text
+
 
 async def _wait_for_stop_signal() -> None:
     stop = asyncio.Event()
@@ -61,8 +74,19 @@ def main() -> None:
     except ValidationError as e:
         print(f"Configuration error: {e}", file=sys.stderr)
         sys.exit(2)
-    logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    # httpx logs every request URL at INFO, and the SauceNAO api_key is in the query string
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        RedactingFormatter(
+            "%(asctime)s %(levelname)s %(name)s: %(message)s",
+            [
+                settings.bot_token.get_secret_value(),
+                settings.saucenao_api_key.get_secret_value(),
+                settings.webhook_secret.get_secret_value() if settings.webhook_secret else "",
+            ],
+        )
+    )
+    logging.basicConfig(level=settings.log_level, handlers=[handler])
+    # httpx logs every request URL at INFO, SauceNAO api_key included
     logging.getLogger("httpx").setLevel(logging.WARNING)
     asyncio.run(run(settings))
 

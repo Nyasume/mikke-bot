@@ -1,5 +1,6 @@
 """The bot's only HTTP server: Telegram webhook, token-free images, health check."""
 
+import contextlib
 import logging
 import re
 from pathlib import PurePosixPath
@@ -13,6 +14,7 @@ from aiohttp import web
 logger = logging.getLogger(__name__)
 
 FILE_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,256}")
+STREAM_TIMEOUT_SECONDS = 120
 IMAGE_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
@@ -48,17 +50,23 @@ def build_app(bot: Bot, dp: Dispatcher, webhook_secret: str | None = None) -> we
         if not file.file_path or content_type is None:
             raise web.HTTPNotFound
 
-        chunks = bot.session.stream_content(url=bot.session.api.file_url(bot.token, file.file_path))
-        try:
-            first = await anext(chunks, b"")
-        except aiohttp.ClientError as e:
-            logger.warning("Downloading /img/%s failed: %s", file_id, e)
-            raise web.HTTPBadGateway from e
-        response = web.StreamResponse(headers={"Content-Type": content_type, "Cache-Control": "public, max-age=86400"})
-        await response.prepare(request)
-        await response.write(first)
-        async for chunk in chunks:
-            await response.write(chunk)
+        headers = {"Content-Type": content_type, "Cache-Control": "public, max-age=86400"}
+        if request.method == "HEAD":
+            return web.Response(headers=headers)
+
+        url = bot.session.api.file_url(bot.token, file.file_path)
+        async with contextlib.aclosing(bot.session.stream_content(url=url, timeout=STREAM_TIMEOUT_SECONDS)) as chunks:
+            try:
+                first = await anext(chunks, b"")
+            except (aiohttp.ClientError, TimeoutError) as e:
+                # the error text holds the file URL with the token: log the type and status only
+                logger.warning("Downloading /img/%s failed: %s %s", file_id, type(e).__name__, getattr(e, "status", ""))
+                raise web.HTTPBadGateway from None
+            response = web.StreamResponse(headers=headers)
+            await response.prepare(request)
+            await response.write(first)
+            async for chunk in chunks:
+                await response.write(chunk)
         await response.write_eof()
         return response
 

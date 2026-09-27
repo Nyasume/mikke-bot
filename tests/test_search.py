@@ -1,7 +1,7 @@
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import GetFile, SendMessage, SendPhoto, SendSticker
 
-from payloads import ADMIN_ID, ANIME, BOT_TOKEN, PUBLIC_URL, sauce_response
+from payloads import ADMIN_ID, ANIME, BOT_TOKEN, PUBLIC_URL, sauce_response, telegram_file_error
 from reverse_search_bot import texts
 from reverse_search_bot.media import Media
 from reverse_search_bot.saucenao import SEARCH_URL
@@ -169,3 +169,22 @@ async def test_url_search_uses_the_url_itself(respx_mock, harness):
     assert route.calls.last.request.url.params["url"] == "https://example.com/pic.png"
     assert "example.com%2Fpic.png" in answer.keyboard.inline_keyboard[0][0].url
     assert harness.session.requests == []
+
+
+async def test_download_failure_keeps_the_token_out_of_reports_and_logs(respx_mock, harness, monkeypatch, caplog):
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME]))
+
+    async def failing_stream(*args, **kwargs):
+        raise telegram_file_error(BOT_TOKEN)
+        yield b""  # pragma: no cover
+
+    monkeypatch.setattr(harness.session, "stream_content", failing_stream)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO)
+
+    assert answer.text == texts.ERROR
+    assert route.call_count == 0
+    [report] = _admin_messages(harness)
+    assert "DownloadError: ClientResponseError HTTP 502" in report.text
+    assert BOT_TOKEN not in report.text
+    assert BOT_TOKEN not in caplog.text

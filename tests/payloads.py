@@ -1,8 +1,11 @@
-"""Test data: constants, SauceNAO payloads and Telegram update builders (plain dicts)."""
+"""Test data: constants, SauceNAO payloads, Telegram update builders (plain dicts)."""
 
 import itertools
 import time
 from typing import Any
+
+import aiohttp
+from yarl import URL
 
 BOT_TOKEN = "42:TEST-token"
 BOT_USERNAME = "SauceTestBot"
@@ -81,3 +84,11 @@ def message(chat: dict = PRIVATE, *, date: int | None = None, **fields: Any) -> 
 
 def update(msg: dict) -> dict:
     return {"update_id": next(_update_ids), "message": msg}
+
+
+def telegram_file_error(token: str, path: str = "photos/file_1.jpg") -> aiohttp.ClientResponseError:
+    """What aiohttp raises when Telegram's file server fails: the text quotes the URL, token included."""
+    url = URL(f"https://api.telegram.org/file/bot{token}/{path}")
+    return aiohttp.ClientResponseError(
+        request_info=aiohttp.RequestInfo(url, "GET", {}, url), history=(), status=502, message="Bad Gateway"
+    )

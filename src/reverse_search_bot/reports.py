@@ -43,6 +43,8 @@ class Reporter:
     async def error(self, bot: Bot, description: str) -> None:
         if not self._errors:
             return
+        # exception texts from aiohttp can contain Telegram file URLs, which carry the token
+        description = description.replace(bot.token, "<token>")
         text = f"⚠ <b>Error</b>\n<code>{html.escape(description[:3500])}</code>"
         for admin_id in self._admin_ids:
             try:

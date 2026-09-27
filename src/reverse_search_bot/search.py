@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
+import aiohttp
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import InlineKeyboardMarkup
@@ -28,6 +29,10 @@ class Answer:
 
 class InvalidFileError(Exception):
     """Telegram refused to give us the file (too big, gone, ...)."""
+
+
+class DownloadError(Exception):
+    """Downloading the file from Telegram failed."""
 
 
 class Searcher:
@@ -63,6 +68,10 @@ class Searcher:
                 data = await bot.download_file(file.file_path)
             except TelegramBadRequest as e:
                 raise InvalidFileError(e.message) from e
+            except (aiohttp.ClientError, TimeoutError) as e:
+                # the aiohttp error text holds the file URL, bot token included: drop it
+                status = getattr(e, "status", None)
+                raise DownloadError(f"{type(e).__name__}{f' HTTP {status}' if status else ''}") from None
             return await self._saucenao.search(image=data.getvalue(), filename=PurePosixPath(file.file_path).name)
 
         return await self._search(bot, media.file_unique_id, self.image_url(media.file_id), media, query)
