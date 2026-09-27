@@ -2,7 +2,14 @@ import time
 
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.methods import AnswerCallbackQuery, AnswerInlineQuery, EditMessageText, GetFile, SendMessage
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    AnswerInlineQuery,
+    EditMessageText,
+    GetFile,
+    SendMessage,
+    SendRichMessage,
+)
 
 from mikke import texts
 from mikke.saucenao import SEARCH_URL
@@ -145,7 +152,9 @@ async def test_favourite_group_sticker_is_not_searched(harness, found):
     assert harness.session.requests == []
 
 
-@pytest.mark.parametrize("text", ["/sauce", "/source", f"/sauce@{BOT_USERNAME}", f"/source@{BOT_USERNAME}", "sauce", "SOURCE", "What?"])
+@pytest.mark.parametrize(
+    "text", ["/sauce", "/source", f"/sauce@{BOT_USERNAME}", f"/source@{BOT_USERNAME}", "sauce", "SOURCE", "What?"]
+)
 async def test_group_reply_trigger_searches_the_replied_media(harness, found, text):
     media_msg = message(GROUP, photo=PHOTO)
     await harness.feed(update(message(GROUP, text=text, reply_to_message=media_msg)))
@@ -396,7 +405,14 @@ async def test_scene_press_searches_the_replied_media_and_replies_to_it(harness,
 
 
 async def test_scene_press_on_a_video_searches_its_thumbnail(harness, scene_found):
-    video = {"file_id": "video-id", "file_unique_id": "video-u", "width": 1, "height": 1, "duration": 5, "thumbnail": THUMB}
+    video = {
+        "file_id": "video-id",
+        "file_unique_id": "video-u",
+        "width": 1,
+        "height": 1,
+        "duration": 5,
+        "thumbnail": THUMB,
+    }
     await harness.feed(button_press(bot_answer(PRIVATE, message(video=video))))
 
     assert _searched_file_ids(harness) == ["thumb-id"]
@@ -428,7 +444,6 @@ async def test_scene_quota_used_up_gets_an_alert_and_no_more_api_calls(harness, 
     route = respx_mock.post(TRACE_URL).respond(402, json=QUOTA_DEPLETED)
 
     await harness.feed(button_press(bot_answer(GROUP, message(GROUP, photo=PHOTO))))
-    requests_before = len(harness.session.requests)
     await harness.feed(button_press(bot_answer(GROUP, message(GROUP, sticker=STATIC_STICKER))))
 
     first, second = harness.session.calls(AnswerCallbackQuery)
@@ -436,7 +451,7 @@ async def test_scene_quota_used_up_gets_an_alert_and_no_more_api_calls(harness, 
     assert (second.text, second.show_alert) == (texts.SCENE_LIMIT, True)
     assert route.call_count == 1
     # the second press did not even download the file
-    assert len(harness.session.requests) == requests_before + 1
+    assert _searched_file_ids(harness) == ["photo-large-id"]
     assert _sent(harness) == []
 
 
@@ -447,9 +462,11 @@ async def test_scene_error_gets_an_alert_and_is_reported(harness, respx_mock):
 
     [answer] = harness.session.calls(AnswerCallbackQuery)
     assert (answer.text, answer.show_alert) == (texts.SCENE_ERROR, True)
-    [report] = _sent(harness)
+    # in the search's activity report, not in a separate error report
+    assert _sent(harness) == []
+    [report] = harness.session.calls(SendRichMessage)
     assert report.chat_id == ADMIN_ID
-    assert "TraceMoeError: HTTP 503: Error: Search queue is full" in report.text
+    assert "TraceMoeError: HTTP 503: Error: Search queue is full" in report.rich_message.html
 
 
 async def test_scene_error_is_not_cached(harness, respx_mock):

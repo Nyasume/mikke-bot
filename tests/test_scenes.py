@@ -1,7 +1,8 @@
 import pytest
 
 from mikke import texts
-from mikke.scenes import render
+from mikke.reports import Hit
+from mikke.scenes import hit, render
 from payloads import SCENE
 
 
@@ -31,6 +32,17 @@ def test_scene_shows_titles_episode_time_and_similarity():
         ("AniList", "https://anilist.co/anime/20517"),
         ("MyAnimeList", "https://myanimelist.net/anime/21273"),
     ]
+
+
+def test_scene_for_the_owner_report():
+    assert hit(SCENE) == Hit(
+        "Is the Order a Rabbit?",
+        96.1,
+        (("AniList", "https://anilist.co/anime/20517"), ("MyAnimeList", "https://myanimelist.net/anime/21273")),
+    )
+    assert hit(_scene(anilist=99939, similarity=0.5)) == Hit(
+        "Gochuumon wa Usagi desu ka - 03 (BD 1280x720).mp4", 50.0, (("AniList", "https://anilist.co/anime/99939"),)
+    )
 
 
 @pytest.mark.parametrize(("similarity", "shown"), [(0.874, "87.4%"), (0.5, "50.0%")])

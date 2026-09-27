@@ -5,7 +5,14 @@ from urllib.parse import quote
 
 import pytest
 from aiogram.exceptions import TelegramForbiddenError
-from aiogram.methods import AnswerCallbackQuery, AnswerInlineQuery, EditMessageText, GetFile, SendMessage, SendPhoto
+from aiogram.methods import (
+    AnswerCallbackQuery,
+    AnswerInlineQuery,
+    EditMessageText,
+    GetFile,
+    SendMessage,
+    SendRichMessage,
+)
 
 from mikke import texts
 from mikke.saucenao import SEARCH_URL
@@ -54,18 +61,19 @@ async def test_a_search_is_answered_and_reported_by_the_bot_that_received_it(har
 
     await harness.feed(update(msg), harness.bots[1])
 
-    placeholder, report = extra.calls(SendMessage)
+    [placeholder] = extra.calls(SendMessage)
     assert (placeholder.chat_id, placeholder.text) == (PRIVATE["id"], texts.LOADING)
     assert placeholder.reply_parameters.message_id == msg["message_id"]
     assert [call.file_id for call in extra.calls(GetFile)] == ["extra-photo-large-id"]
     [edit] = extra.calls(EditMessageText)
     assert edit.chat_id == PRIVATE["id"]
     assert edit.text.startswith("<b>One Piece (Ep. 12)</b>")
-    # the owner report links the image through this bot, and resends the file_id only this bot knows
+    # the owner report names this bot, embeds the file_id only this bot knows and links the image through it
+    [report] = extra.calls(SendRichMessage)
     assert report.chat_id == ADMIN_ID
-    assert "img%2F43%2Fextra-photo-large-id" in report.text
-    [photo] = extra.calls(SendPhoto)
-    assert (photo.chat_id, photo.photo) == (ADMIN_ID, "extra-photo-large-id")
+    assert [item.media.media for item in report.rich_message.media] == ["extra-photo-large-id"]
+    assert f"via @{EXTRA_BOT_USERNAME}" in report.rich_message.html
+    assert "img%2F43%2Fextra-photo-large-id" in report.rich_message.html
     assert primary.requests == []
 
 
@@ -92,9 +100,12 @@ async def test_results_found_by_one_bot_are_cached_for_the_other(harness, found)
     assert extra.calls(GetFile) == []
     [first], [second] = primary.calls(EditMessageText), extra.calls(EditMessageText)
     assert second.text == first.text
-    # each bot reports its own answer, with the file it can resend
-    assert [call.photo for call in primary.calls(SendPhoto)] == ["photo-large-id"]
-    assert [call.photo for call in extra.calls(SendPhoto)] == ["extra-photo-large-id"]
+    # each bot reports its own answer, with the file it can send
+    [primary_report], [extra_report] = primary.calls(SendRichMessage), extra.calls(SendRichMessage)
+    assert [item.media.media for item in primary_report.rich_message.media] == ["photo-large-id"]
+    assert [item.media.media for item in extra_report.rich_message.media] == ["extra-photo-large-id"]
+    assert "💾 from the cache" not in primary_report.rich_message.html
+    assert "💾 from the cache" in extra_report.rich_message.html
 
 
 async def test_the_saucenao_limit_is_shared(harness, respx_mock):
@@ -213,11 +224,12 @@ async def test_an_admin_who_never_started_a_bot_is_warned_about_once(harness, re
         await harness.feed(update(message(photo=photo)), harness.bots[1])
     await harness.feed(update(message(photo=PHOTO)))
 
-    # both reports were tried, and failed
-    assert [call.chat_id for call in extra.calls(SendMessage)] == [PRIVATE["id"], ADMIN_ID] * 2
+    # both reports were tried, and failed, without a plain one after the rich one
+    assert [call.chat_id for call in extra.calls(SendRichMessage)] == [ADMIN_ID] * 2
+    assert [call.chat_id for call in extra.calls(SendMessage)] == [PRIVATE["id"]] * 2
     assert [call.chat_id for call in extra.calls(EditMessageText)] == [PRIVATE["id"]] * 2
     warnings = [record for record in caplog.records if "gets no reports" in record.getMessage()]
     assert [record.levelname for record in warnings] == ["WARNING"]
     assert warnings[0].getMessage().startswith(f"Admin {ADMIN_ID} gets no reports from @{EXTRA_BOT_USERNAME}")
     # the primary bot, which the admin started, still reports
-    assert [call.chat_id for call in primary.calls(SendMessage)] == [PRIVATE["id"], ADMIN_ID]
+    assert [call.chat_id for call in primary.calls(SendRichMessage)] == [ADMIN_ID]

@@ -4,7 +4,8 @@ from pathlib import Path
 import pytest
 
 from mikke import texts
-from mikke.results import fallback_keyboard, grid, keyboard, links, render, render_text, select
+from mikke.reports import Hit
+from mikke.results import fallback_keyboard, grid, hits, keyboard, links, render, render_text, select
 from payloads import ANIME, result
 
 SAMPLE_NOMATCH = Path(__file__).parent.parent / "docs" / "legacy" / "saucenao-sample-nomatch.json"
@@ -12,6 +13,10 @@ SAMPLE_NOMATCH = Path(__file__).parent.parent / "docs" / "legacy" / "saucenao-sa
 
 def _layout(markup) -> list[list[str]]:
     return [[button.text for button in row] for row in markup.inline_keyboard]
+
+
+def _matches(results: list[dict]) -> list[dict]:
+    return [data for _, data in select(results)]
 
 
 def test_sample_without_match_selects_nothing():
@@ -22,23 +27,32 @@ def test_sample_without_match_selects_nothing():
 
 def test_select_keeps_results_within_tolerance_of_the_best():
     results = [result(70.0, n=3), result(95.1, n=1), result(88.2, n=2), result(59.9, n=4), result(87.0, n=5)]
-    assert [data["n"] for data in select(results)] == [1, 2]
+    assert [(similarity, data["n"]) for similarity, data in select(results)] == [(95.1, 1), (88.2, 2)]
 
 
 def test_select_skips_malformed_similarity():
-    assert select([{"header": {}, "data": {"title": "x"}}, result(80, title="ok")]) == [{"title": "ok"}]
+    assert select([{"header": {}, "data": {"title": "x"}}, result(80, title="ok")]) == [(80.0, {"title": "ok"})]
 
 
 def test_anime_result_shows_episode_year_and_time():
-    text, markup = render(select([ANIME]))
+    text, markup = render(_matches([ANIME]))
     assert text == "<b>One Piece (Ep. 12)</b>\n<b>Year: </b>1999-1999\n<b>Time: </b>00:12:33 / 00:24:40"
+    # the owner report lists the match with its similarity and links
+    [hit] = hits(select([ANIME]))
+    assert (hit.title, hit.similarity, [site for site, _ in hit.links]) == (
+        "One Piece",
+        93.1,
+        ["AniDB", "MAL", "AniList"],
+    )
     assert _layout(markup) == [["View on AniDB", "MAL", "AniList"]]
     assert markup.inline_keyboard[0][1].url == "https://myanimelist.net/anime/21/"
 
 
 def test_anidb_without_mal_link_gets_a_mal_search_button():
-    anidb = result(90, ext_urls=["https://anidb.net/perl-bin/animedb.pl?show=anime&aid=5"], source="K-On!", anidb_aid=5, part="3")
-    text, markup = render(select([anidb]))
+    anidb = result(
+        90, ext_urls=["https://anidb.net/perl-bin/animedb.pl?show=anime&aid=5"], source="K-On!", anidb_aid=5, part="3"
+    )
+    text, markup = render(_matches([anidb]))
     assert text == "<b>K-On! (Ep. 3)</b>"
     assert _layout(markup) == [["View on AniDB", "MAL"]]
     assert markup.inline_keyboard[0][1].url == "https://myanimelist.net/anime.php?q=K-On%21"
@@ -65,7 +79,7 @@ def test_booru_and_pixiv_with_tolerance_cut_and_html_escaping():
     too_far = result(87.0, ext_urls=["https://yande.re/post/show/4"], creator="cut off")
     too_low = result(55.0, ext_urls=["https://e621.net/post/show/5"], title="too low")
 
-    text, markup = render(select([danbooru, pixiv, too_far, too_low]))
+    text, markup = render(_matches([danbooru, pixiv, too_far, too_low]))
 
     assert text == (
         "<b>Tom &amp; Jerry &lt;3</b>\n"
@@ -75,6 +89,20 @@ def test_booru_and_pixiv_with_tolerance_cut_and_html_escaping():
     )
     assert _layout(markup) == [["View on Danbooru", "Gelbooru"], ["Source", "Pixiv"]]
     assert markup.inline_keyboard[1][0].url == "https://i.pximg.net/img-original/img/1_p0.png"
+
+    # the owner report lists the same matches one by one, each with its similarity and own links
+    assert hits(select([danbooru, pixiv, too_far, too_low])) == (
+        Hit(
+            None,
+            95.1,
+            (
+                ("Danbooru", "https://danbooru.donmai.us/post/show/1"),
+                ("Gelbooru", "https://gelbooru.com/index.php?page=post&s=view&id=2"),
+                ("Source", "https://i.pximg.net/img-original/img/1_p0.png"),
+            ),
+        ),
+        Hit("Tom & Jerry <3", 90.2, (("Pixiv", "https://www.pixiv.net/member_illust.php?mode=medium&illust_id=3"),)),
+    )
 
 
 def test_twitter_result_shows_the_handle():
@@ -86,7 +114,7 @@ def test_twitter_result_shows_the_handle():
         twitter_user_id="55",
         twitter_user_handle="some_artist",
     )
-    text, markup = render(select([tweet]))
+    text, markup = render(_matches([tweet]))
     assert text == "<b>By: </b>@some_artist"
     assert _layout(markup) == [["View on Twitter"]]
 
@@ -99,7 +127,7 @@ def test_doujin_with_creator_list_and_no_links_has_no_keyboard():
         eng_name="[Circle] Some Doujin",
         jp_name="(C90) [サークル] 同人誌",
     )
-    text, markup = render(select([doujin]))
+    text, markup = render(_matches([doujin]))
     assert text == "<b>Original</b>\n<b>By: </b>Artist A, Artist B"
     assert markup is None
 
@@ -146,7 +174,9 @@ def test_links_are_one_per_site_and_at_most_six():
 
 
 def test_unknown_site_is_labelled_by_host():
-    assert links([{"ext_urls": ["https://www.example.com/a"]}]) == [("View on example.com", "https://www.example.com/a")]
+    assert links([{"ext_urls": ["https://www.example.com/a"]}]) == [
+        ("View on example.com", "https://www.example.com/a")
+    ]
 
 
 def test_no_links_means_no_keyboard():

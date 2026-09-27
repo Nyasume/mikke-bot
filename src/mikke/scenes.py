@@ -11,7 +11,7 @@ from cachetools import TTLCache
 
 from mikke import texts
 from mikke.media import Media
-from mikke.reports import Reporter
+from mikke.reports import Hit, Outcome
 from mikke.results import keyboard
 from mikke.search import CACHE_SIZE, CACHE_TTL_SECONDS, Answer, InvalidFileError, download
 from mikke.tracemoe import QuotaExceededError, TraceMoe
@@ -29,6 +29,8 @@ class Alert:
     """A popup on the pressed button instead of a message."""
 
     text: str
+    # how the search went, for the owner report
+    outcome: Outcome
 
 
 def _clean(value: Any) -> str | None:
@@ -66,40 +68,59 @@ def _episode(scene: Scene) -> str | None:
     return str(episode) if episode not in (None, "") else None
 
 
-def render(scene: Scene) -> tuple[str, InlineKeyboardMarkup | None]:
+def _info(scene: Scene) -> dict[str, Any]:
     anilist = scene.get("anilist")
     # a bare AniList id when trace.moe could not add the AniList info
-    info: dict[str, Any] = anilist if isinstance(anilist, dict) else {"id": anilist}
-    titles = info.get("title") or {}
+    return anilist if isinstance(anilist, dict) else {"id": anilist}
+
+
+def _titles(scene: Scene) -> tuple[str, str | None]:
+    """The title, and the romaji one to show below it when it differs."""
+    titles = _info(scene).get("title") or {}
     english, romaji = _clean(titles.get("english")), _clean(titles.get("romaji"))
     title = english or romaji or _clean(titles.get("native")) or _clean(scene.get("filename")) or texts.NO_TITLE
+    return title, romaji if english and romaji and romaji != english else None
 
+
+def _similarity(scene: Scene) -> float:
+    similarity = scene.get("similarity")
+    # rounded as shown, so 89.99% does not read "90.0%, weak match"
+    return round(similarity, 3) if isinstance(similarity, int | float) else 0.0
+
+
+def _links(scene: Scene) -> list[tuple[str, str]]:
+    info, links = _info(scene), []
+    if isinstance(anilist_id := info.get("id"), int):
+        links.append(("AniList", f"https://anilist.co/anime/{anilist_id}"))
+    if isinstance(mal_id := info.get("idMal"), int):
+        links.append(("MyAnimeList", f"https://myanimelist.net/anime/{mal_id}"))
+    return links
+
+
+def render(scene: Scene) -> tuple[str, InlineKeyboardMarkup | None]:
+    title, romaji = _titles(scene)
     lines = [f"🎬 <b>{html.escape(title, quote=False)}</b>"]
-    if english and romaji and romaji != english:
+    if romaji:
         lines.append(f"<i>{html.escape(romaji, quote=False)}</i>")
     fields = [("Episode", _episode(scene)), ("Time", _time_range(scene))]
     lines += [f"<b>{name}: </b>{html.escape(value, quote=False)}" for name, value in fields if value]
-    similarity = scene.get("similarity")
-    # rounded as shown, so 89.99% does not read "90.0%, weak match"
-    similarity = round(similarity, 3) if isinstance(similarity, int | float) else 0.0
+    similarity = _similarity(scene)
     lines.append(f"<b>Similarity: </b>{similarity:.1%}")
     if similarity < WEAK_SIMILARITY:
         lines.append(texts.SCENE_WEAK)
+    return "\n".join(lines), keyboard(_links(scene))
 
-    buttons = []
-    if isinstance(anilist_id := info.get("id"), int):
-        buttons.append(("AniList", f"https://anilist.co/anime/{anilist_id}"))
-    if isinstance(mal_id := info.get("idMal"), int):
-        buttons.append(("MyAnimeList", f"https://myanimelist.net/anime/{mal_id}"))
-    return "\n".join(lines), keyboard(buttons)
+
+def hit(scene: Scene) -> Hit:
+    """The scene, for the owner report."""
+    return Hit(_titles(scene)[0], round(_similarity(scene) * 100, 1), tuple(_links(scene)))
 
 
 class SceneSearcher:
     """Cache, then trace.moe, then the answer; only ever run when someone asks."""
 
-    def __init__(self, tracemoe: TraceMoe, reporter: Reporter, cache: TTLCache | None = None) -> None:
+    def __init__(self, tracemoe: TraceMoe, cache: TTLCache | None = None) -> None:
         self._tracemoe = tracemoe
-        self._reporter = reporter
         # the best scene by file_unique_id; an empty list is a cached "not found"
         self._cache: TTLCache[str, list[Scene]] = (
             cache if cache is not None else TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS)
@@ -108,6 +129,7 @@ class SceneSearcher:
     async def search(self, bot: Bot, media: Media) -> Answer | Alert:
         key = media.file_unique_id
         best = self._cache.get(key)
+        cached = best is not None
         if best is None:
             try:
                 # no point in downloading the file while the quota is used up
@@ -115,16 +137,16 @@ class SceneSearcher:
                 image, filename = await download(bot, media)
                 best = (await self._tracemoe.search(image, filename))[:1]
             except QuotaExceededError:
-                return Alert(texts.SCENE_LIMIT)
+                return Alert(texts.SCENE_LIMIT, Outcome("limit"))
             except InvalidFileError as e:
                 logger.info("Invalid file %s: %s", key, e)
-                return Alert(texts.SCENE_INVALID_FILE)
+                return Alert(texts.SCENE_INVALID_FILE, Outcome("invalid_file", error=str(e)))
             except Exception as e:
                 logger.exception("Scene search failed for %s", key)
-                await self._reporter.error(bot, f"Scene search failed for {key}\n{type(e).__name__}: {e}")
-                return Alert(texts.SCENE_ERROR)
+                return Alert(texts.SCENE_ERROR, Outcome("error", error=f"{type(e).__name__}: {e}"))
             self._cache[key] = best
 
         if not best:
-            return Answer(texts.SCENE_NOT_FOUND)
-        return Answer(*render(best[0]))
+            return Answer(texts.SCENE_NOT_FOUND, Outcome("not_found", cached))
+        text, markup = render(best[0])
+        return Answer(text, Outcome("found", cached, (hit(best[0]),)), markup)

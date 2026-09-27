@@ -11,8 +11,8 @@ from cachetools import TTLCache
 
 from mikke import texts
 from mikke.media import Media
-from mikke.reports import Reporter
-from mikke.results import Match, fallback_keyboard, render, select
+from mikke.reports import Outcome
+from mikke.results import Scored, fallback_keyboard, hits, render, select
 from mikke.saucenao import QuotaExceededError, SauceNao
 
 logger = logging.getLogger(__name__)
@@ -24,9 +24,14 @@ CACHE_TTL_SECONDS = 24 * 60 * 60
 @dataclass(frozen=True)
 class Answer:
     text: str
+    # how the search went, for the owner report
+    outcome: Outcome
     keyboard: InlineKeyboardMarkup | None = None
-    # Telegram would not give us the file, so searching it elsewhere is pointless too
-    invalid_file: bool = False
+
+    @property
+    def invalid_file(self) -> bool:
+        """Telegram would not give us the file, so searching it elsewhere is pointless too."""
+        return self.outcome.status == "invalid_file"
 
 
 class InvalidFileError(Exception):
@@ -54,20 +59,13 @@ async def download(bot: Bot, media: Media) -> tuple[bytes, str]:
 
 
 class Searcher:
-    """Cache, then SauceNAO, then the answer; reports go to the owner on the way."""
+    """Cache, then SauceNAO, then the answer."""
 
-    def __init__(
-        self,
-        saucenao: SauceNao,
-        reporter: Reporter,
-        public_url: str | None,
-        cache: TTLCache | None = None,
-    ) -> None:
+    def __init__(self, saucenao: SauceNao, public_url: str | None, cache: TTLCache | None = None) -> None:
         self._saucenao = saucenao
-        self._reporter = reporter
         self._public_url = public_url
         # accepted matches by file_unique_id or "url:<url>"; an empty list is a cached "no result"
-        self._cache: TTLCache[str, list[Match]] = (
+        self._cache: TTLCache[str, list[Scored]] = (
             cache if cache is not None else TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS)
         )
 
@@ -85,36 +83,29 @@ class Searcher:
             image, filename = await download(bot, media)
             return await self._saucenao.search(image=image, filename=filename)
 
-        return await self._search(bot, media.file_unique_id, self.image_url(bot, media.file_id), media, query)
+        return await self._search(media.file_unique_id, self.image_url(bot, media.file_id), query)
 
-    async def search_url(self, bot: Bot, url: str) -> Answer:
-        return await self._search(bot, f"url:{url}", url, None, lambda: self._saucenao.search(url=url))
+    async def search_url(self, url: str) -> Answer:
+        return await self._search(f"url:{url}", url, lambda: self._saucenao.search(url=url))
 
-    async def _search(
-        self,
-        bot: Bot,
-        key: str,
-        image_url: str | None,
-        media: Media | None,
-        query: Callable[[], Awaitable[list[dict]]],
-    ) -> Answer:
-        matches = self._cache.get(key)
-        if matches is None:
+    async def _search(self, key: str, image_url: str | None, query: Callable[[], Awaitable[list[dict]]]) -> Answer:
+        scored = self._cache.get(key)
+        cached = scored is not None
+        if scored is None:
             try:
-                matches = select(await query())
+                scored = select(await query())
             except QuotaExceededError:
-                return Answer(texts.LIMIT_REACHED, fallback_keyboard(image_url))
+                return Answer(texts.LIMIT_REACHED, Outcome("limit"), fallback_keyboard(image_url))
             except InvalidFileError as e:
                 logger.info("Invalid file %s: %s", key, e)
-                return Answer(texts.INVALID_FILE, invalid_file=True)
+                return Answer(texts.INVALID_FILE, Outcome("invalid_file", error=str(e)))
             except Exception as e:
                 logger.exception("Search failed for %s", key)
-                await self._reporter.error(bot, f"Search failed for {image_url or key}\n{type(e).__name__}: {e}")
-                return Answer(texts.ERROR, fallback_keyboard(image_url))
-            self._cache[key] = matches
+                failed = Outcome("error", error=f"{type(e).__name__}: {e}")
+                return Answer(texts.ERROR, failed, fallback_keyboard(image_url))
+            self._cache[key] = scored
 
-        if not matches:
-            return Answer(texts.NO_RESULT, fallback_keyboard(image_url))
-        text, keyboard = render(matches)
-        await self._reporter.result(bot, text, keyboard, image_url, media)
-        return Answer(text, keyboard)
+        if not scored:
+            return Answer(texts.NO_RESULT, Outcome("not_found", cached), fallback_keyboard(image_url))
+        text, keyboard = render([data for _, data in scored])
+        return Answer(text, Outcome("found", cached, hits(scored)), keyboard)

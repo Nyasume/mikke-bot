@@ -8,6 +8,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from mikke import texts
+from mikke.reports import Hit
 
 MIN_SIMILARITY = 60.0
 TOLERANCE = 7.0
@@ -45,11 +46,12 @@ SITE_NAMES = {
 }
 
 Match = dict[str, Any]  # the `data` object of one SauceNAO result
+Scored = tuple[float, Match]  # a match and its similarity
 
 
-def select(results: list[dict]) -> list[Match]:
-    """Accepted results, best first: similarity >= 60 and within 7 points of the best one."""
-    scored: list[tuple[float, Match]] = []
+def select(results: list[dict]) -> list[Scored]:
+    """Accepted results with their similarity, best first: similarity >= 60 and within 7 points of the best one."""
+    scored: list[Scored] = []
     for result in results:
         try:
             similarity = float((result.get("header") or {}).get("similarity"))
@@ -61,7 +63,7 @@ def select(results: list[dict]) -> list[Match]:
     if not scored:
         return []
     best = scored[0][0]
-    return [data for similarity, data in scored if best - similarity <= TOLERANCE]
+    return [(similarity, data) for similarity, data in scored if best - similarity <= TOLERANCE]
 
 
 def _is_url(value: Any) -> bool:
@@ -147,8 +149,8 @@ def site_name(url: str) -> str | None:
     return host or None
 
 
-def links(matches: list[Match]) -> list[tuple[str, str]]:
-    """(caption, url) buttons: one per site, at most six, the first one "View on X"."""
+def _sites(matches: list[Match]) -> dict[str, str]:
+    """The first link to each site, by site name."""
     found: dict[str, str] = {}
     for data in matches:
         for url in data.get("ext_urls") or []:
@@ -157,6 +159,12 @@ def links(matches: list[Match]) -> list[tuple[str, str]]:
         source = data.get("source")
         if _is_link(source) and "Source" not in found:
             found["Source"] = source
+    return found
+
+
+def links(matches: list[Match]) -> list[tuple[str, str]]:
+    """(caption, url) buttons: one per site, at most six, the first one "View on X"."""
+    found = _sites(matches)
     if "MAL" not in found and any(d.get("anidb_aid") for d in matches):
         query = _first(matches, lambda d: None if _is_url(d.get("source")) else d.get("source")) or _first(
             matches, _title
@@ -191,6 +199,11 @@ def keyboard(buttons: list[tuple[str, str]]) -> InlineKeyboardMarkup | None:
 
 def render(matches: list[Match]) -> tuple[str, InlineKeyboardMarkup | None]:
     return render_text(matches), keyboard(links(matches))
+
+
+def hits(scored: list[Scored]) -> tuple[Hit, ...]:
+    """The matches behind an answer, one by one, for the owner report."""
+    return tuple(Hit(_title(data), similarity, tuple(_sites([data]).items())) for similarity, data in scored)
 
 
 # Search-by-URL pages of other engines, `{}` is the percent-encoded image URL.

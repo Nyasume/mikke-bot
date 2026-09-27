@@ -73,7 +73,11 @@ SCENE = {
     "anilist": {
         "id": 20517,
         "idMal": 21273,
-        "title": {"native": "ご注文はうさぎですか？", "romaji": "Gochuumon wa Usagi Desu ka?", "english": "Is the Order a Rabbit?"},
+        "title": {
+            "native": "ご注文はうさぎですか？",
+            "romaji": "Gochuumon wa Usagi Desu ka?",
+            "english": "Is the Order a Rabbit?",
+        },
         "synonyms": ["GochiUsa"],
         "isAdult": False,
     },
@@ -98,6 +102,11 @@ USER = {"id": 7, "is_bot": False, "first_name": "User"}
 PRIVATE = {"id": 7, "type": "private", "first_name": "User"}
 GROUP = {"id": -500, "type": "supergroup", "title": "Group"}
 FAV_GROUP = {"id": FAVOURITE_GROUP, "type": "supergroup", "title": "Favourite"}
+# made up, like everything here: the repository is public
+ASKER = {"id": 1234567, "is_bot": False, "first_name": "Test", "last_name": "User", "username": "test_user"}
+PUBLIC_GROUP = {"id": -1001234567890, "type": "supergroup", "title": "Anime Art <Fans>", "username": "example_art"}
+PRIVATE_SUPERGROUP = {"id": -1009876543210, "type": "supergroup", "title": "Secret Club"}
+BASIC_GROUP = {"id": -4001234, "type": "group", "title": "Old Group"}
 
 PHOTO = [
     {"file_id": "photo-small-id", "file_unique_id": "photo-small-u", "width": 90, "height": 90},

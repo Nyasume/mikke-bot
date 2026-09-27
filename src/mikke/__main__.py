@@ -53,9 +53,9 @@ async def run(settings: Settings) -> None:
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as http:
         saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value())
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
-        searcher = Searcher(saucenao, reporter, settings.public_url)
+        searcher = Searcher(saucenao, settings.public_url)
         trace_key = settings.trace_moe_api_key.get_secret_value() if settings.trace_moe_api_key else None
-        scenes = SceneSearcher(TraceMoe(http, trace_key), reporter)
+        scenes = SceneSearcher(TraceMoe(http, trace_key))
         dp = build_dispatcher(settings, searcher, scenes, reporter)
 
         webhook = settings.bot_mode == "webhook"
@@ -99,9 +99,7 @@ def main() -> None:
         print(f"Configuration error: {e}", file=sys.stderr)
         sys.exit(2)
     handler = logging.StreamHandler()
-    handler.setFormatter(
-        RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s", settings.secrets())
-    )
+    handler.setFormatter(RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s", settings.secrets()))
     logging.basicConfig(level=settings.log_level, handlers=[handler])
     # httpx logs every request URL at INFO, SauceNAO api_key included
     logging.getLogger("httpx").setLevel(logging.WARNING)

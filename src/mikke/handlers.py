@@ -28,7 +28,7 @@ from mikke import texts
 from mikke.flood import FloodMiddleware
 from mikke.media import Media, find_media, normalize_url
 from mikke.observability import is_expected
-from mikke.reports import Reporter
+from mikke.reports import Reporter, Search
 from mikke.scenes import Alert, SceneSearcher
 from mikke.search import Answer, Searcher
 
@@ -84,7 +84,7 @@ async def on_new_members(message: Message, bot: Bot) -> None:
         await message.answer(texts.HELP)
 
 
-async def on_trigger(message: Message, bot: Bot, searcher: Searcher) -> None:
+async def on_trigger(message: Message, bot: Bot, searcher: Searcher, reporter: Reporter) -> None:
     """`/sauce`, `/source`, `sauce`, `source` or `what?` in reply to a media message."""
     target = message.reply_to_message
     media = find_media(target) if target else None
@@ -92,11 +92,21 @@ async def on_trigger(message: Message, bot: Bot, searcher: Searcher) -> None:
         if (message.text or "").startswith("/"):
             await message.reply(texts.USAGE)
         return
-    await search_message(target, bot, searcher, media)
+    await _search_message(target, bot, searcher, reporter, media, asked_by=message)
 
 
-async def search_message(message: Message, bot: Bot, searcher: Searcher, media: Media) -> None:
-    """Reply to `message` with the placeholder, then edit it into the answer."""
+async def search_message(message: Message, bot: Bot, searcher: Searcher, reporter: Reporter, media: Media) -> None:
+    """Media in private, or a photo in a favourite group."""
+    await _search_message(message, bot, searcher, reporter, media, asked_by=message)
+
+
+async def _search_message(
+    message: Message, bot: Bot, searcher: Searcher, reporter: Reporter, media: Media, *, asked_by: Message
+) -> None:
+    """Reply to `message` with the placeholder, edit it into the answer, then report the search to the owner.
+
+    `asked_by` is the message that asked: `message` itself, or a /sauce in reply to it.
+    """
     placeholder = await message.answer(
         texts.LOADING,
         reply_markup=LOADING_KEYBOARD,
@@ -107,9 +117,23 @@ async def search_message(message: Message, bot: Bot, searcher: Searcher, media: 
         rows = answer.keyboard.inline_keyboard if answer.keyboard else []
         answer = replace(answer, keyboard=InlineKeyboardMarkup(inline_keyboard=[*rows, [SCENE_BUTTON]]))
     await _edit(bot, answer, chat_id=placeholder.chat.id, message_id=placeholder.message_id)
+    search = Search(
+        "SauceNAO",
+        answer.outcome,
+        answer.text,
+        asked_by.from_user,
+        chat=message.chat,
+        message_id=message.message_id,
+        sender_chat=asked_by.sender_chat,
+        media=media,
+        image_url=searcher.image_url(bot, media.file_id),
+    )
+    await reporter.search(bot, search)
 
 
-async def on_scene_button(callback: CallbackQuery, bot: Bot, scenes: SceneSearcher) -> None:
+async def on_scene_button(
+    callback: CallbackQuery, bot: Bot, scenes: SceneSearcher, searcher: Searcher, reporter: Reporter
+) -> None:
     """🎬 under an answer: look up the anime scene of the media that answer replies to."""
     answer_message = callback.message
     target = answer_message.reply_to_message if isinstance(answer_message, Message) else None
@@ -120,13 +144,24 @@ async def on_scene_button(callback: CallbackQuery, bot: Bot, scenes: SceneSearch
     result = await scenes.search(bot, media)
     if isinstance(result, Alert):
         await _answer_callback(callback, result.text)
-        return
-    await answer_message.answer(
+    else:
+        await answer_message.answer(
+            result.text,
+            reply_markup=result.keyboard,
+            reply_parameters=ReplyParameters(message_id=target.message_id, allow_sending_without_reply=True),
+        )
+        await _answer_callback(callback)
+    search = Search(
+        "trace.moe",
+        result.outcome,
         result.text,
-        reply_markup=result.keyboard,
-        reply_parameters=ReplyParameters(message_id=target.message_id, allow_sending_without_reply=True),
+        callback.from_user,
+        chat=target.chat,
+        message_id=target.message_id,
+        media=media,
+        image_url=searcher.image_url(bot, media.file_id),
     )
-    await _answer_callback(callback)
+    await reporter.search(bot, search)
 
 
 async def on_inline_query(query: InlineQuery) -> None:
@@ -146,12 +181,13 @@ async def on_inline_query(query: InlineQuery) -> None:
     await query.answer(results)
 
 
-async def on_chosen_inline_result(result: ChosenInlineResult, bot: Bot, searcher: Searcher) -> None:
+async def on_chosen_inline_result(result: ChosenInlineResult, bot: Bot, searcher: Searcher, reporter: Reporter) -> None:
     url = normalize_url(result.query)
     if url is None or result.inline_message_id is None:
         return
-    answer = await searcher.search_url(bot, url)
+    answer = await searcher.search_url(url)
     await _edit(bot, answer, inline_message_id=result.inline_message_id)
+    await reporter.search(bot, Search("SauceNAO", answer.outcome, answer.text, result.from_user, image_url=url))
 
 
 async def on_error(

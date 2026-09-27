@@ -8,7 +8,7 @@ from urllib.parse import quote
 import pytest
 import sentry_sdk
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.methods import EditMessageText, GetFile, SendMessage
+from aiogram.methods import EditMessageText, GetFile, SendMessage, SendRichMessage
 from aiohttp import test_utils
 from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
@@ -398,7 +398,9 @@ async def test_failed_edits_are_not_sent(sentry, found, error):
 @pytest.mark.parametrize(
     "error",
     [
-        TelegramForbiddenError(method=SendMessage(chat_id=7, text="x"), message="Forbidden: bot was blocked by the user"),
+        TelegramForbiddenError(
+            method=SendMessage(chat_id=7, text="x"), message="Forbidden: bot was blocked by the user"
+        ),
         TelegramBadRequest(
             method=SendMessage(chat_id=7, text="x"), message="Bad Request: not enough rights to send text messages"
         ),
@@ -428,7 +430,8 @@ async def test_an_admin_who_never_started_a_bot_is_not_sent(sentry, respx_mock):
     # the SauceNAO failure is the only event; the report that could not be delivered is not one
     [event] = transport.events
     assert event["logentry"]["message"].startswith("Search failed")
-    assert [call.chat_id for call in extra.calls(SendMessage)] == [7, ADMIN_ID]
+    assert [call.chat_id for call in extra.calls(SendMessage)] == [7]
+    assert [call.chat_id for call in extra.calls(SendRichMessage)] == [ADMIN_ID]
 
 
 async def test_img_failures_are_not_sent(sentry, monkeypatch):

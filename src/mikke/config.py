@@ -44,9 +44,12 @@ class Settings(BaseSettings):
     # A trace.moe sponsor's key for a higher quota; without it the anime scene search runs as a guest
     trace_moe_api_key: SecretStr | None = None
 
-    # Owner reports: every found result with the searched image, and every error
+    # Owner reports go to these users, through the bot that handled the update
     admin_ids: Annotated[list[int], NoDecode] = []
+    # An activity report for every search, found or not, SauceNAO and trace.moe alike: the searched image,
+    # the outcome, who asked and where, the bot and whether the answer was cached. A failed search is in it.
     report_results: bool = True
+    # Every error: handler failures, and failed searches when REPORT_RESULTS is off
     report_errors: bool = True
 
     # Every photo posted in these chats is searched automatically

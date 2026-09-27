@@ -40,6 +40,8 @@ class FakeSession(BaseSession):
         self.chat_errors: dict[int, Exception] = {}
         self.content = IMAGE
         self.streamed: list[str] = []
+        # every send_* call and the message it returned
+        self.sent: list[tuple[TelegramMethod, Message]] = []
         self._ids = itertools.count(1000)
 
     async def close(self) -> None:
@@ -56,13 +58,16 @@ class FakeSession(BaseSession):
         if isinstance(method, GetFile):
             path = self.file_paths.get(method.file_id, f"photos/{method.file_id}.jpg")
             return File(file_id=method.file_id, file_unique_id=f"u-{method.file_id}", file_path=path)
-        if hasattr(method, "chat_id") and not getattr(method, "message_id", None):  # send_*
-            return Message(
+        # send_*; edits name a message, inline ones have no chat
+        if getattr(method, "chat_id", None) is not None and not getattr(method, "message_id", None):
+            sent = Message(
                 message_id=next(self._ids),
                 date=datetime.now(UTC),
                 chat=Chat(id=method.chat_id, type="private"),
                 text=getattr(method, "text", None),
             )
+            self.sent.append((method, sent))
+            return sent
         return True
 
     async def stream_content(
@@ -139,10 +144,10 @@ def make_harness(http: httpx.AsyncClient):
         saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value(), clock=clock)
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
         cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
-        searcher = Searcher(saucenao, reporter, settings.public_url, cache=cache)
+        searcher = Searcher(saucenao, settings.public_url, cache=cache)
         tracemoe = TraceMoe(http, clock=clock)
         scene_cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
-        scenes = SceneSearcher(tracemoe, reporter, cache=scene_cache)
+        scenes = SceneSearcher(tracemoe, cache=scene_cache)
         dp = build_dispatcher(settings, searcher, scenes, reporter)
         return Harness(settings, bots, dp, searcher, saucenao, scenes, tracemoe, clock)
 

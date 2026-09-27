@@ -15,7 +15,8 @@ class Media:
 
     `file_id` is the image sent to SauceNAO: the thumbnail for videos, GIFs and
     animated stickers, which Telegram does not let bots resend. The owner report
-    resends the original media instead, hence `kind` and `original_file_id`.
+    embeds that image through its /img/ link; its plain fallback resends the
+    original media instead, hence `kind` and `original_file_id`.
     """
 
     file_id: str
