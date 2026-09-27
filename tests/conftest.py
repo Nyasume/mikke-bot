@@ -33,6 +33,8 @@ class FakeSession(BaseSession):
         self.file_paths: dict[str, str] = {}
         self.errors: dict[type, Exception] = {}
         self.fail_once: dict[type, Exception] = {}
+        # every call to these chats fails, like writing to someone who never started the bot
+        self.chat_errors: dict[int, Exception] = {}
         self.content = IMAGE
         self.streamed: list[str] = []
         self._ids = itertools.count(1000)
@@ -43,6 +45,8 @@ class FakeSession(BaseSession):
     async def make_request(self, bot: Bot, method: TelegramMethod, timeout: int | None = None) -> Any:  # noqa: ASYNC109
         self.requests.append(method)
         if (error := self.errors.get(type(method)) or self.fail_once.pop(type(method), None)) is not None:
+            raise error
+        if (error := self.chat_errors.get(getattr(method, "chat_id", None))) is not None:
             raise error
         if isinstance(method, GetMe):
             return User(id=bot.id, is_bot=True, first_name="Mikke", username=USERNAMES[bot.id])

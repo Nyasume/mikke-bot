@@ -24,6 +24,7 @@ from payloads import (
     ANIME,
     API_KEY,
     BOT_TOKEN,
+    EXTRA_BOT_TOKEN,
     PHOTO,
     bot_answer,
     button_press,
@@ -348,6 +349,22 @@ async def test_a_chat_the_bot_cannot_write_to_is_neither_sent_nor_reported(sentr
 
     assert transport.events == []
     assert [call.chat_id for call in _sent(harness)] == [7]  # the placeholder only, no owner report
+
+
+async def test_an_admin_who_never_started_a_bot_is_not_sent(sentry, respx_mock):
+    harness, transport = sentry(extra_bot_tokens=[EXTRA_BOT_TOKEN])
+    respx_mock.post(SEARCH_URL).respond(500, text="boom")
+    extra = harness.sessions[1]
+    extra.chat_errors[ADMIN_ID] = TelegramForbiddenError(
+        method=SendMessage(chat_id=ADMIN_ID, text="x"), message="Forbidden: bot can't initiate conversation with a user"
+    )
+
+    await harness.feed(_photo(), harness.bots[1])
+
+    # the SauceNAO failure is the only event; the report that could not be delivered is not one
+    [event] = transport.events
+    assert event["logentry"]["message"].startswith("Search failed")
+    assert [call.chat_id for call in extra.calls(SendMessage)] == [7, ADMIN_ID]
 
 
 async def test_img_failures_are_not_sent(sentry, monkeypatch):

@@ -1,11 +1,15 @@
-"""Owner reports: found results with the searched image, and errors."""
+"""Owner reports: found results with the searched image, and errors.
+
+Reports go through the bot that handled the update, since the file_ids they
+resend only work with that bot. An admin gets them only from bots they started.
+"""
 
 import html
 import logging
 from urllib.parse import urlencode
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.types import InlineKeyboardMarkup
 
 from mikke.media import Media
@@ -18,6 +22,8 @@ class Reporter:
         self._admin_ids = admin_ids
         self._results = results
         self._errors = errors
+        # (bot id, admin id) pairs already warned about: that admin never started that bot, or blocked it
+        self._unreachable: set[tuple[int, int]] = set()
 
     async def result(
         self,
@@ -38,7 +44,7 @@ class Reporter:
                 if media is not None:
                     await _resend(bot, admin_id, media)
             except TelegramAPIError as e:
-                logger.warning("Could not report the result to %s: %s", admin_id, e)
+                await self._failed(bot, admin_id, "result", e)
 
     async def error(self, bot: Bot, description: str) -> None:
         if not self._errors:
@@ -50,7 +56,18 @@ class Reporter:
             try:
                 await bot.send_message(admin_id, text)
             except TelegramAPIError as e:
-                logger.warning("Could not report the error to %s: %s", admin_id, e)
+                await self._failed(bot, admin_id, "error", e)
+
+    async def _failed(self, bot: Bot, admin_id: int, what: str, error: TelegramAPIError) -> None:
+        if not isinstance(error, TelegramForbiddenError):
+            logger.warning("Could not report the %s to %s: %s", what, admin_id, error)
+            return
+        # once, not on every report: a bot the admin never started cannot write to them at all
+        if (bot.id, admin_id) in self._unreachable:
+            return
+        self._unreachable.add((bot.id, admin_id))
+        username = (await bot.me()).username
+        logger.warning("Admin %s gets no reports from @%s until they start it: %s", admin_id, username, error)
 
 
 async def _resend(bot: Bot, chat_id: int, media: Media) -> None:

@@ -4,6 +4,7 @@ import time
 from urllib.parse import quote
 
 import pytest
+from aiogram.exceptions import TelegramForbiddenError
 from aiogram.methods import AnswerCallbackQuery, AnswerInlineQuery, EditMessageText, GetFile, SendMessage, SendPhoto
 
 from mikke import texts
@@ -198,3 +199,25 @@ async def test_errors_are_reported_through_the_bot_that_failed(harness, found):
     assert report.chat_id == ADMIN_ID
     assert "RuntimeError: telegram exploded" in report.text
     assert primary.requests == []
+
+
+async def test_an_admin_who_never_started_a_bot_is_warned_about_once(harness, respx_mock, caplog):
+    respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME]))
+    primary, extra = harness.sessions
+    extra.chat_errors[ADMIN_ID] = TelegramForbiddenError(
+        method=SendMessage(chat_id=ADMIN_ID, text="x"), message="Forbidden: bot can't initiate conversation with a user"
+    )
+
+    for picture in ("first-u", "second-u"):
+        photo = [{**size, "file_unique_id": picture} for size in EXTRA_PHOTO]
+        await harness.feed(update(message(photo=photo)), harness.bots[1])
+    await harness.feed(update(message(photo=PHOTO)))
+
+    # both reports were tried, and failed
+    assert [call.chat_id for call in extra.calls(SendMessage)] == [PRIVATE["id"], ADMIN_ID] * 2
+    assert [call.chat_id for call in extra.calls(EditMessageText)] == [PRIVATE["id"]] * 2
+    warnings = [record for record in caplog.records if "gets no reports" in record.getMessage()]
+    assert [record.levelname for record in warnings] == ["WARNING"]
+    assert warnings[0].getMessage().startswith(f"Admin {ADMIN_ID} gets no reports from @{EXTRA_BOT_USERNAME}")
+    # the primary bot, which the admin started, still reports
+    assert [call.chat_id for call in primary.calls(SendMessage)] == [PRIVATE["id"], ADMIN_ID]
