@@ -17,6 +17,10 @@ def env(monkeypatch):
         "REPORT_RESULTS",
         "REPORT_ERRORS",
         "TRACE_MOE_API_KEY",
+        "SENTRY_DSN",
+        "SENTRY_ENVIRONMENT",
+        "SENTRY_RELEASE",
+        "SENTRY_TRACES_SAMPLE_RATE",
     ):
         monkeypatch.delenv(name, raising=False)
     for name, value in REQUIRED.items():
@@ -33,6 +37,9 @@ def test_defaults(env):
     assert settings.bot_mode == "polling"
     assert (settings.web_host, settings.web_port) == ("0.0.0.0", 8080)
     assert settings.trace_moe_api_key is None
+    assert settings.sentry_dsn is None
+    assert (settings.sentry_environment, settings.sentry_release) == ("production", None)
+    assert settings.sentry_traces_sample_rate == 0.0
 
 
 def test_trace_moe_api_key_is_optional(env, tmp_path):
@@ -84,14 +91,31 @@ def test_webhook_mode_ok(env):
 
 def test_blank_values_count_as_unset(env, tmp_path):
     dotenv = tmp_path / ".env"
-    dotenv.write_text("ADMIN_IDS=\nPUBLIC_URL=\nWEBHOOK_SECRET=\nFAVOURITE_GROUPS=\n")
+    dotenv.write_text("ADMIN_IDS=\nPUBLIC_URL=\nWEBHOOK_SECRET=\nFAVOURITE_GROUPS=\nSENTRY_DSN=\nSENTRY_RELEASE=\n")
     settings = Settings(_env_file=dotenv)
     assert settings.admin_ids == []
     assert settings.public_url is None
     assert settings.webhook_secret is None
+    assert settings.sentry_dsn is None
+    assert settings.sentry_release is None
 
 
 def test_blank_token_is_an_error(env):
     env.setenv("BOT_TOKEN", "")
     with pytest.raises(ValidationError):
         Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("rate", ["-0.1", "1.5"])
+def test_traces_sample_rate_is_a_fraction(env, rate):
+    env.setenv("SENTRY_TRACES_SAMPLE_RATE", rate)
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+def test_secrets_are_the_set_secret_values(env):
+    assert Settings(_env_file=None).secrets() == ["42:TEST", "key"]
+    env.setenv("TRACE_MOE_API_KEY", "sponsor-key")
+    env.setenv("WEBHOOK_SECRET", "hook")
+    env.setenv("SENTRY_DSN", "https://public@sentry.example.invalid/1")
+    assert Settings(_env_file=None).secrets() == ["42:TEST", "key", "sponsor-key", "hook"]

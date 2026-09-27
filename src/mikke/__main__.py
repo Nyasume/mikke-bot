@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from mikke.bot import InFlight, build_bot, build_dispatcher
 from mikke.config import Settings
+from mikke.observability import init_sentry
 from mikke.reports import Reporter
 from mikke.saucenao import SauceNao
 from mikke.scenes import SceneSearcher
@@ -45,6 +46,8 @@ async def _wait_for_stop_signal() -> None:
 
 
 async def run(settings: Settings) -> None:
+    # inside the event loop, which the Sentry asyncio integration patches
+    init_sentry(settings)
     bot = build_bot(settings)
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as http:
         saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value())
@@ -89,15 +92,7 @@ def main() -> None:
         sys.exit(2)
     handler = logging.StreamHandler()
     handler.setFormatter(
-        RedactingFormatter(
-            "%(asctime)s %(levelname)s %(name)s: %(message)s",
-            [
-                settings.bot_token.get_secret_value(),
-                settings.saucenao_api_key.get_secret_value(),
-                settings.webhook_secret.get_secret_value() if settings.webhook_secret else "",
-                settings.trace_moe_api_key.get_secret_value() if settings.trace_moe_api_key else "",
-            ],
-        )
+        RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s", settings.secrets())
     )
     logging.basicConfig(level=settings.log_level, handlers=[handler])
     # httpx logs every request URL at INFO, SauceNAO api_key included

@@ -4,12 +4,14 @@ import re
 from dataclasses import replace
 from typing import Any
 
+import sentry_sdk
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart, Filter, or_f
 from aiogram.types import (
     CallbackQuery,
+    Chat,
     ChosenInlineResult,
     ErrorEvent,
     InlineKeyboardButton,
@@ -19,11 +21,13 @@ from aiogram.types import (
     InputTextMessageContent,
     Message,
     ReplyParameters,
+    User,
 )
 
 from mikke import texts
 from mikke.flood import FloodMiddleware
 from mikke.media import Media, find_media, normalize_url
+from mikke.observability import is_expected
 from mikke.reports import Reporter
 from mikke.scenes import Alert, SceneSearcher
 from mikke.search import Answer, Searcher
@@ -150,11 +154,27 @@ async def on_chosen_inline_result(result: ChosenInlineResult, bot: Bot, searcher
     await _edit(bot, answer, inline_message_id=result.inline_message_id)
 
 
-async def on_error(event: ErrorEvent, bot: Bot, reporter: Reporter) -> None:
-    logger.error("Update %s failed", event.update.update_id, exc_info=event.exception)
-    await reporter.error(
-        bot, f"Update {event.update.update_id} failed\n{type(event.exception).__name__}: {event.exception}"
-    )
+async def on_error(
+    event: ErrorEvent,
+    bot: Bot,
+    reporter: Reporter,
+    event_from_user: User | None = None,
+    event_chat: Chat | None = None,
+) -> None:
+    update, error = event.update, event.exception
+    if is_expected(error):
+        # the user blocked the bot or deleted a message it was answering: nothing to fix
+        logger.warning("Update %s: %s", update.update_id, error)
+        return
+    with sentry_sdk.new_scope() as scope:
+        # numeric ids only: names and texts stay out of Sentry
+        scope.set_tag("update_type", update.event_type)
+        scope.set_context("telegram", {"update_id": update.update_id, "chat_id": event_chat.id if event_chat else None})
+        if event_from_user is not None:
+            scope.set_user({"id": str(event_from_user.id)})
+        # the Sentry logging integration makes this record the event, once
+        logger.error("Update %s failed", update.update_id, exc_info=error)
+    await reporter.error(bot, f"Update {update.update_id} failed\n{type(error).__name__}: {error}")
 
 
 async def _answer_callback(callback: CallbackQuery, alert: str | None = None) -> None:

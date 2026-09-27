@@ -1,7 +1,7 @@
 import re
 from typing import Annotated, Literal, Self
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Telegram accepts only these characters in a webhook secret token
@@ -37,6 +37,17 @@ class Settings(BaseSettings):
     web_port: int = 8080
 
     log_level: str = "INFO"
+
+    # Sentry is off without a DSN. The Docker image built by CI sets SENTRY_RELEASE to mikke-bot@<commit sha>.
+    sentry_dsn: SecretStr | None = None
+    sentry_environment: str = "production"
+    sentry_release: str | None = None
+    sentry_traces_sample_rate: float = Field(0.0, ge=0.0, le=1.0)
+
+    def secrets(self) -> list[str]:
+        """The values that must never reach the logs or Sentry."""
+        values = (self.bot_token, self.saucenao_api_key, self.trace_moe_api_key, self.webhook_secret)
+        return [value.get_secret_value() for value in values if value is not None]
 
     @field_validator("admin_ids", "favourite_groups", mode="before")
     @classmethod
