@@ -65,8 +65,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.deploy
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: read
     steps:
+      # Full history, so the Sentry release below can list the commits since the previous one
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       # The key is pinned server-side to ~/BOTS/mikke/deploy.sh (restrict,command=...):
       # it can only pull and restart the bot. The job's GITHUB_TOKEN goes over stdin
       # for the GHCR pull and expires with the job.
@@ -82,3 +87,17 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           printf '%s\n' "$GHCR_TOKEN" | ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes "$TARGET"
+      # Same release name as the image's SENTRY_RELEASE; links its commits (suspect commits)
+      # and records the production deploy. A Sentry outage must not fail a finished deploy.
+      - name: Sentry release
+        uses: getsentry/action-release@v3
+        continue-on-error: true
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: nicosmile
+          SENTRY_PROJECT: mikke-bot
+        with:
+          release: mikke-bot@${{ github.sha }}
+          environment: production
+          set_commits: auto
+          ignore_missing: true
