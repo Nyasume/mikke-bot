@@ -1,6 +1,7 @@
 import contextlib
 import logging
 import time
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -15,6 +16,7 @@ SEARCH_URL = "https://saucenao.com/search.php"
 # the daily one is rolling and frees up gradually, so probe it again now and then.
 SHORT_WINDOW_SECONDS = 30.0
 LONG_WINDOW_RETRY_SECONDS = 600.0
+DEFAULT_SHORT_LIMIT = 4
 
 
 class QuotaExceededError(Exception):
@@ -44,10 +46,17 @@ class SauceNao:
         self._api_key = api_key
         self._clock = clock
         self._blocked_until = 0.0
+        # Send times within the short window. The response headers only describe
+        # finished requests, so a burst of concurrent searches is capped locally.
+        self._short_limit = DEFAULT_SHORT_LIMIT
+        self._sent: deque[float] = deque()
 
     @property
     def exhausted(self) -> bool:
-        return self._clock() < self._blocked_until
+        now = self._clock()
+        while self._sent and now - self._sent[0] >= SHORT_WINDOW_SECONDS:
+            self._sent.popleft()
+        return now < self._blocked_until or len(self._sent) >= self._short_limit
 
     def check_quota(self) -> None:
         if self.exhausted:
@@ -56,6 +65,7 @@ class SauceNao:
     async def search(self, *, image: bytes | None = None, filename: str = "image.jpg", url: str | None = None) -> list[dict]:
         """Search by uploaded image bytes or by a public URL; return the raw `results` list."""
         self.check_quota()
+        self._sent.append(self._clock())
         params = {
             "output_type": 2,
             "api_key": self._api_key,
@@ -93,6 +103,8 @@ class SauceNao:
         return results
 
     def _track(self, header: dict) -> None:
+        if (short_limit := _as_int(header.get("short_limit"))) and short_limit > 0:
+            self._short_limit = short_limit
         long_left = _as_int(header.get("long_remaining"))
         short_left = _as_int(header.get("short_remaining"))
         if long_left is not None and long_left <= 0:

@@ -121,3 +121,30 @@ async def test_partial_failure_still_returns_results(respx_mock, saucenao):
 async def test_client_side_status_is_no_result(respx_mock, saucenao):
     respx_mock.post(SEARCH_URL).respond(json=sauce_response([], status=-3))
     assert await saucenao.search(image=IMAGE) == []
+
+
+async def test_concurrent_burst_is_capped_before_the_headers_say_so(respx_mock, saucenao, clock):
+    # every response still reports quota left, as when requests overlap
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([], short_remaining=3))
+
+    for _ in range(4):
+        await saucenao.search(image=IMAGE)
+    with pytest.raises(QuotaExceededError):
+        await saucenao.search(image=IMAGE)
+    assert route.call_count == 4
+
+    clock.now += SHORT_WINDOW_SECONDS
+    await saucenao.search(image=IMAGE)
+    assert route.call_count == 5
+
+
+async def test_short_limit_follows_the_account(respx_mock, saucenao):
+    response = sauce_response([], short_remaining=5)
+    response["header"]["short_limit"] = "6"
+    route = respx_mock.post(SEARCH_URL).respond(json=response)
+
+    for _ in range(6):
+        await saucenao.search(image=IMAGE)
+    with pytest.raises(QuotaExceededError):
+        await saucenao.search(image=IMAGE)
+    assert route.call_count == 6
