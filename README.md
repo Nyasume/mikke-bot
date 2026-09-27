@@ -39,6 +39,10 @@ uv run ruff check .
 
 Tests are offline: Telegram is replaced by a fake session, SauceNAO and trace.moe are mocked with respx.
 
+## Error monitoring
+
+With `SENTRY_DSN` set, unexpected errors go to [Sentry](https://sentry.io): handler and HTTP route exceptions and everything logged at ERROR. Used up quotas, empty results, flood protection and users who blocked the bot or deleted a message are not errors and stay in the logs. The bot token, the API keys and the webhook secret are filtered out of every event and breadcrumb, and no Telegram user data beyond numeric ids is sent. Docker images built by CI carry the release `mikke-bot@<commit sha>` (`SENTRY_RELEASE` build arg).
+
 ## Credits
 
 Mikke started as [kawaiiDango/reverseSearchBot](https://github.com/kawaiiDango/reverseSearchBot) (Node.js, Apache-2.0), later run as the fork [AnyByte/reverseSearchBot](https://github.com/AnyByte/reverseSearchBot). The first commit of this repository imports upstream `5845465`; the current code is a from-scratch Python rewrite of its behaviour. See [NOTICE](NOTICE).
