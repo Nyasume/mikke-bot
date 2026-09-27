@@ -10,7 +10,6 @@ import httpx
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.session.base import BaseSession
-from aiogram.exceptions import TelegramAPIError
 from aiogram.methods import GetFile, GetMe, TelegramMethod
 from aiogram.types import Chat, File, Message, User
 from cachetools import TTLCache
@@ -30,7 +29,8 @@ class FakeSession(BaseSession):
         super().__init__()
         self.requests: list[TelegramMethod] = []
         self.file_paths: dict[str, str] = {}
-        self.errors: dict[type, TelegramAPIError] = {}
+        self.errors: dict[type, Exception] = {}
+        self.fail_once: dict[type, Exception] = {}
         self.content = IMAGE
         self.streamed: list[str] = []
         self._ids = itertools.count(1000)
@@ -40,7 +40,7 @@ class FakeSession(BaseSession):
 
     async def make_request(self, bot: Bot, method: TelegramMethod, timeout: int | None = None) -> Any:  # noqa: ASYNC109
         self.requests.append(method)
-        if (error := self.errors.get(type(method))) is not None:
+        if (error := self.errors.get(type(method)) or self.fail_once.pop(type(method), None)) is not None:
             raise error
         if isinstance(method, GetMe):
             return User(id=bot.id, is_bot=True, first_name="Sauce", username=BOT_USERNAME)

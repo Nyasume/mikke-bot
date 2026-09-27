@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from payloads import ANIME, result
 from reverse_search_bot import texts
 from reverse_search_bot.results import fallback_keyboard, grid, keyboard, links, render, render_text, select
@@ -161,3 +163,19 @@ def test_fallback_keyboard_links_the_image_everywhere():
         f"https://tineye.com/search?url={encoded}",
     ]
     assert fallback_keyboard(None) is None
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "https://i.pximg.net/a.png https://twitter.com/b/status/1",
+        "https://twitter.com/b/status/1 (edited)",
+        "https://localhost/a.png",
+        "http://",
+    ],
+)
+def test_free_text_sources_do_not_become_buttons(source):
+    matches = [{"ext_urls": ["https://danbooru.donmai.us/post/show/1"], "source": source}]
+    assert [label for label, _ in links(matches)] == ["View on Danbooru"]
+    # still a URL, so not a title either
+    assert render_text(matches) == texts.NO_TITLE

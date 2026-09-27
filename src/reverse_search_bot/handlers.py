@@ -1,10 +1,11 @@
+import asyncio
 import logging
 import re
 from typing import Any
 
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
 from aiogram.filters import Command, CommandStart, Filter, or_f
 from aiogram.types import (
     ChosenInlineResult,
@@ -124,7 +125,22 @@ async def on_error(event: ErrorEvent, bot: Bot, reporter: Reporter) -> None:
 
 
 async def _edit(bot: Bot, answer: Answer, **target: Any) -> None:
-    try:
-        await bot.edit_message_text(text=answer.text, reply_markup=answer.keyboard, **target)
-    except TelegramBadRequest as e:
-        logger.warning("Could not edit the answer: %s", e.message)
+    """Edit the placeholder into the answer; if that fails, it stays on "Pouring..." for good."""
+    keyboard = answer.keyboard
+    for _attempt in range(2):
+        try:
+            await bot.edit_message_text(text=answer.text, reply_markup=keyboard, **target)
+            return
+        except TelegramRetryAfter as e:
+            logger.warning("Editing the answer is rate limited, retrying in %s s", e.retry_after)
+            await asyncio.sleep(min(e.retry_after, 60))
+        except TelegramBadRequest as e:
+            if keyboard is None:
+                logger.warning("Could not edit the answer: %s", e.message)
+                return
+            # most likely a link Telegram does not accept as a button: show the text alone
+            logger.warning("Could not edit the answer with buttons (%s), retrying without", e.message)
+            keyboard = None
+        except TelegramAPIError as e:
+            logger.warning("Could not edit the answer: %s", e)
+            return

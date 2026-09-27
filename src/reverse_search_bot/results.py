@@ -68,6 +68,18 @@ def _is_url(value: Any) -> bool:
     return isinstance(value, str) and value.startswith(("http://", "https://"))
 
 
+def _is_link(value: Any) -> bool:
+    """A URL Telegram accepts for a button. Booru `source` fields are free text:
+    several URLs separated by spaces, or a URL with a note after it."""
+    if not _is_url(value) or any(char.isspace() for char in value):
+        return False
+    try:
+        host = urlsplit(value).hostname
+    except ValueError:
+        return False
+    return bool(host) and "." in host.strip(".")
+
+
 def _text(value: Any) -> str | None:
     if isinstance(value, list):
         value = ", ".join(str(item) for item in value if item not in (None, ""))
@@ -140,10 +152,10 @@ def links(matches: list[Match]) -> list[tuple[str, str]]:
     found: dict[str, str] = {}
     for data in matches:
         for url in data.get("ext_urls") or []:
-            if _is_url(url) and (name := site_name(url)) and name not in found:
+            if _is_link(url) and (name := site_name(url)) and name not in found:
                 found[name] = url
         source = data.get("source")
-        if _is_url(source) and "Source" not in found:
+        if _is_link(source) and "Source" not in found:
             found["Source"] = source
     if "MAL" not in found and any(d.get("anidb_aid") for d in matches):
         query = _first(matches, lambda d: None if _is_url(d.get("source")) else d.get("source")) or _first(

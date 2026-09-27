@@ -1,6 +1,7 @@
 import time
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.methods import AnswerInlineQuery, EditMessageText, GetFile, SendMessage
 
 from payloads import (
@@ -286,3 +287,26 @@ async def test_error_report_hides_the_token(harness, found):
     assert BOT_TOKEN not in report.text
     assert "/file/bot&lt;token&gt;/x.jpg" in report.text
 
+
+async def test_rejected_buttons_fall_back_to_the_text_alone(harness, found):
+    harness.session.fail_once[EditMessageText] = TelegramBadRequest(
+        method=EditMessageText(text="x"), message="Bad Request: BUTTON_URL_INVALID"
+    )
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    first, second = harness.session.calls(EditMessageText)
+    assert first.reply_markup is not None
+    assert second.reply_markup is None
+    assert second.text == first.text
+
+
+async def test_rate_limited_edit_is_retried(harness, found):
+    harness.session.fail_once[EditMessageText] = TelegramRetryAfter(
+        method=EditMessageText(text="x"), message="Too Many Requests", retry_after=0
+    )
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    first, second = harness.session.calls(EditMessageText)
+    assert second.reply_markup == first.reply_markup
