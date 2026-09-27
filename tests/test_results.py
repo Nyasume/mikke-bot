@@ -153,13 +153,16 @@ def test_no_links_means_no_keyboard():
     assert keyboard([]) is None
 
 
-def test_fallback_keyboard_links_the_image_everywhere():
+def test_fallback_keyboard_links_the_image_to_six_engines():
     markup = fallback_keyboard("https://example.org/mikke/img/abc")
-    assert _layout(markup) == [["Google Lens", "SauceNAO", "TinEye"]]
+    assert _layout(markup) == [["Google Lens", "Yandex", "Bing"], ["SauceNAO", "ascii2d", "TinEye"]]
     encoded = "https%3A%2F%2Fexample.org%2Fmikke%2Fimg%2Fabc"
-    assert [button.url for button in markup.inline_keyboard[0]] == [
+    assert [button.url for row in markup.inline_keyboard for button in row] == [
         f"https://lens.google.com/uploadbyurl?url={encoded}",
+        f"https://yandex.com/images/search?rpt=imageview&url={encoded}",
+        f"https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:{encoded}",
         f"https://saucenao.com/search.php?url={encoded}",
+        f"https://ascii2d.net/search/url/{encoded}?type=color",
         f"https://tineye.com/search?url={encoded}",
     ]
     assert fallback_keyboard(None) is None

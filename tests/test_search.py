@@ -89,7 +89,14 @@ async def test_no_result_is_cached_and_offers_fallback_links(respx_mock, harness
     again = await harness.searcher.search_file(harness.bot, PHOTO)
 
     assert answer.text == texts.NO_RESULT
-    assert [button.text for button in answer.keyboard.inline_keyboard[0]] == ["Google Lens", "SauceNAO", "TinEye"]
+    assert [button.text for row in answer.keyboard.inline_keyboard for button in row] == [
+        "Google Lens",
+        "Yandex",
+        "Bing",
+        "SauceNAO",
+        "ascii2d",
+        "TinEye",
+    ]
     assert f"{PUBLIC_URL}/img/photo-file-id".replace(":", "%3A").replace("/", "%2F") in answer.keyboard.inline_keyboard[0][0].url
     assert again == answer
     assert route.call_count == 1

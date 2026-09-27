@@ -6,7 +6,7 @@ Mikke (みっけ, "found it!") is a Telegram bot, [@reverseSearch2Bot](https://t
 - Groups: reply to a media message with `/sauce` or `/source` (or just `sauce`, `source`, `what?`).
 - Inline: type `@reverseSearch2Bot <image URL>` in any chat.
 
-When nothing is found, or the SauceNAO limit is reached, the bot links the image to Google Lens, SauceNAO and TinEye instead.
+When nothing is found, or the SauceNAO limit is reached, Mikke links the image to Google Lens, Yandex, Bing, SauceNAO, ascii2d and TinEye instead.
 
 ## Running
 

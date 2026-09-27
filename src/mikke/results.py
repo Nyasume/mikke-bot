@@ -193,6 +193,22 @@ def render(matches: list[Match]) -> tuple[str, InlineKeyboardMarkup | None]:
     return render_text(matches), keyboard(links(matches))
 
 
+# Search-by-URL pages of other engines, `{}` is the percent-encoded image URL.
+# ascii2d's template is the one its official browser extension opens.
+ENGINES = [
+    [
+        ("Google Lens", "https://lens.google.com/uploadbyurl?url={}"),
+        ("Yandex", "https://yandex.com/images/search?rpt=imageview&url={}"),
+        ("Bing", "https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:{}"),
+    ],
+    [
+        ("SauceNAO", "https://saucenao.com/search.php?url={}"),
+        ("ascii2d", "https://ascii2d.net/search/url/{}?type=color"),
+        ("TinEye", "https://tineye.com/search?url={}"),
+    ],
+]
+
+
 def fallback_keyboard(image_url: str | None) -> InlineKeyboardMarkup | None:
     """Links to search the image elsewhere; needs a public, token-free image URL."""
     if not image_url:
@@ -200,10 +216,6 @@ def fallback_keyboard(image_url: str | None) -> InlineKeyboardMarkup | None:
     encoded = quote(image_url, safe="")
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Google Lens", url=f"https://lens.google.com/uploadbyurl?url={encoded}"),
-                InlineKeyboardButton(text="SauceNAO", url=f"https://saucenao.com/search.php?url={encoded}"),
-                InlineKeyboardButton(text="TinEye", url=f"https://tineye.com/search?url={encoded}"),
-            ]
+            [InlineKeyboardButton(text=name, url=template.format(encoded)) for name, template in row] for row in ENGINES
         ]
     )
