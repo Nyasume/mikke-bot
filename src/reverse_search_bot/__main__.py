@@ -7,7 +7,7 @@ import httpx
 from aiohttp import web
 from pydantic import ValidationError
 
-from reverse_search_bot.bot import build_bot, build_dispatcher
+from reverse_search_bot.bot import InFlight, build_bot, build_dispatcher
 from reverse_search_bot.config import Settings
 from reverse_search_bot.reports import Reporter
 from reverse_search_bot.saucenao import SauceNao
@@ -15,6 +15,10 @@ from reverse_search_bot.search import Searcher
 from reverse_search_bot.web import build_app
 
 logger = logging.getLogger(__name__)
+
+# Docker sends SIGKILL 10 s after SIGTERM
+SHUTDOWN_GRACE_SECONDS = 8.0
+
 
 class RedactingFormatter(logging.Formatter):
     """Keeps secrets out of the logs, tracebacks included (aiohttp errors quote Telegram file URLs)."""
@@ -50,7 +54,8 @@ async def run(settings: Settings) -> None:
         secret = settings.webhook_secret.get_secret_value() if webhook and settings.webhook_secret else None
         runner = web.AppRunner(build_app(bot, dp, webhook_secret=secret))
         await runner.setup()
-        await web.TCPSite(runner, settings.web_host, settings.web_port).start()
+        site = web.TCPSite(runner, settings.web_host, settings.web_port)
+        await site.start()
         logger.info("HTTP server on %s:%s, %s mode", settings.web_host, settings.web_port, settings.bot_mode)
         try:
             if webhook:
@@ -60,6 +65,10 @@ async def run(settings: Settings) -> None:
                     allowed_updates=dp.resolve_used_update_types(),
                 )
                 await _wait_for_stop_signal()
+                # stop taking updates, then let the ones in progress finish their edits
+                await site.stop()
+                in_flight: InFlight = dp["in_flight"]
+                await in_flight.wait(SHUTDOWN_GRACE_SECONDS)
             else:
                 await bot.delete_webhook(drop_pending_updates=True)
                 await dp.start_polling(bot)
