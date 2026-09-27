@@ -52,9 +52,9 @@ async def test_private_photo_is_searched_via_placeholder(harness, found):
 
     placeholder, *_reports = _sent(harness)
     assert placeholder.chat_id == PRIVATE["id"]
-    assert placeholder.text == texts.LOADING
+    assert placeholder.text == "<i>Mikke is looking...</i>"
     assert placeholder.reply_parameters.message_id == msg["message_id"]
-    assert placeholder.reply_markup.inline_keyboard[0][0].text == "🍝"
+    assert placeholder.reply_markup.inline_keyboard[0][0].text == "🔍"
     assert _searched_file_ids(harness) == ["photo-large-id"]
     assert found.call_count == 1
 
@@ -181,6 +181,7 @@ async def test_start_and_help(harness, text):
     await harness.feed(update(message(text=text)))
     [reply] = _sent(harness)
     assert reply.text == texts.HELP
+    assert reply.text.startswith("Hi, I'm Mikke!")
 
 
 async def test_added_to_group_sends_help(harness):
@@ -206,7 +207,7 @@ async def test_inline_url_query_offers_a_search(harness, query):
     [answer] = harness.session.calls(AnswerInlineQuery)
     [article] = answer.results
     assert article.id == "url"
-    assert article.title == "Tap for reverse search by URL"
+    assert article.title == texts.INLINE_TITLE
     assert article.input_message_content.message_text == texts.LOADING
     assert article.reply_markup is not None
 

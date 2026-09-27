@@ -125,7 +125,7 @@ async def on_error(event: ErrorEvent, bot: Bot, reporter: Reporter) -> None:
 
 
 async def _edit(bot: Bot, answer: Answer, **target: Any) -> None:
-    """Edit the placeholder into the answer; if that fails, it stays on "Pouring..." for good."""
+    """Edit the placeholder into the answer; if that fails, it stays on "Mikke is looking..." for good."""
     keyboard = answer.keyboard
     for _attempt in range(2):
         try:
