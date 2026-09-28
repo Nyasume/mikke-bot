@@ -123,3 +123,45 @@ async def test_searches_waiting_in_line_stop_once_the_quota_runs_out(respx_mock,
 
     assert all(isinstance(result, QuotaExceededError) for result in results)
     assert route.call_count == 1
+
+
+# --- the quota, for the owner reports -----------------------------------------
+
+
+async def test_usage_counts_the_search_it_came_with(respx_mock, tracemoe):
+    respx_mock.post(SEARCH_URL).respond(json=trace_response([SCENE], quota_used=11))
+    assert tracemoe.usage is None
+
+    await tracemoe.search(_image())
+
+    # quotaUsed is from before this search, which trace.moe counts once it has answered
+    assert tracemoe.usage == (12, 100)
+
+
+async def test_a_depleted_quota_is_taken_as_it_is(respx_mock, tracemoe):
+    respx_mock.post(SEARCH_URL).respond(402, json=QUOTA_DEPLETED)
+
+    with pytest.raises(QuotaExceededError):
+        await tracemoe.search(_image())
+
+    assert tracemoe.usage == (100, 100)
+
+
+async def test_answers_without_the_quota_leave_the_usage_alone(respx_mock, tracemoe):
+    respx_mock.post(SEARCH_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=trace_response([SCENE], quota_used=11)),
+            httpx.Response(402, json={"error": "Concurrency limit exceeded"}),
+        ]
+    )
+
+    await tracemoe.search(_image())
+    with pytest.raises(TraceMoeError):
+        await tracemoe.search(_image())
+
+    assert tracemoe.usage == (12, 100)
+
+
+def test_a_sponsors_key_is_no_guest(http):
+    assert TraceMoe(http, "sponsor-key").sponsored
+    assert not TraceMoe(http).sponsored

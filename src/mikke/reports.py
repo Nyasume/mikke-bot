@@ -10,6 +10,9 @@ token-free /img/ link, which Telegram fetches from us. If Telegram rejects the
 rich message, the same report goes out as a plain HTML message with the
 original media resent as a reply to it.
 
+Each activity report also shows how much of the engine's 24-hour quota is
+used, as the engine last reported it, and whose quota that is (never the key).
+
 Users' own SauceNAO keys are reported as events (added, removed, refused at
 /apikey, rejected during a search), with who and never the key.
 """
@@ -74,6 +77,15 @@ class Hit:
 
 
 @dataclass(frozen=True)
+class Quota:
+    """An engine's 24-hour quota, as the engine last reported it."""
+
+    used: int
+    limit: int
+    whose: str  # "shared key", "own key", "guest" or "sponsor key"; never the key itself
+
+
+@dataclass(frozen=True)
 class Outcome:
     """How a search went."""
 
@@ -83,6 +95,8 @@ class Outcome:
     # "error": the exception; "invalid_file": why Telegram would not give the file
     error: str | None = None
     key: KeyUse | None = None
+    # None while the engine has not reported it yet
+    quota: Quota | None = None
 
 
 @dataclass(frozen=True)
@@ -255,11 +269,14 @@ def _render(search: Search, username: str, bot: Bot) -> _Report:
     if search.image_url:
         page = ENGINE_PAGES[search.engine] + urlencode({"url": search.image_url})
         footer.append(_link(page, search.engine))
+    details = [_who(search.user, search.sender_chat), _where(search)]
+    if outcome.quota is not None:
+        details.append(_quota(search.engine, outcome.quota))
     return _Report(
         heading=HEADINGS[outcome.status].format(search.engine),
         quote=quote,
         hits=[_hit(hit) for hit in outcome.hits],
-        details=[_who(search.user, search.sender_chat), _where(search)],
+        details=details,
         footer=" · ".join(footer),
     )
 
@@ -270,6 +287,10 @@ def _hit(hit: Hit) -> str:
         parts.append(f"<b>{html.escape(hit.title, quote=False)}</b>")
     line = " ".join(parts)
     return " · ".join([line, *(_link(url, site) for site, url in hit.links)])
+
+
+def _quota(engine: Engine, quota: Quota) -> str:
+    return f"📊 {engine}: {quota.used}/{quota.limit} used (24 h) · {quota.whose}"
 
 
 def _account(account: Account) -> str:

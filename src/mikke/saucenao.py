@@ -105,6 +105,13 @@ class SauceNao:
         # The line for a slot: asyncio.Lock wakes its waiters in arrival order
         self._line = asyncio.Lock()
         self._waiting = 0
+        # (used, limit) of the daily window as SauceNAO last reported it, for the owner reports
+        self._usage: tuple[int, int] | None = None
+
+    @property
+    def usage(self) -> tuple[int, int] | None:
+        """How much of the daily window SauceNAO last said was used: (used, limit); None before its first answer."""
+        return self._usage
 
     def with_key(self, api_key: str) -> "SauceNao":
         """A client for another key, over the same connection pool, with limits of its own."""
@@ -225,6 +232,7 @@ class SauceNao:
         return text.replace(self._api_key, "[key]")
 
     def _track(self, header: dict) -> None:
+        self._note(header)
         if (short_limit := _as_int(header.get("short_limit"))) and short_limit > 0:
             self._short_limit = short_limit
         long_left = _as_int(header.get("long_remaining"))
@@ -237,13 +245,23 @@ class SauceNao:
     def _on_rate_limited(self, data: dict | None) -> bool:
         """Pause after a 429; True if it was the daily window."""
         header = (data or {}).get("header") or {}
+        self._note(header)
         if "daily" in str(header.get("message", "")).lower() or _as_int(header.get("long_remaining")) == 0:
             self._pause_daily()
             return True
         self._pause_short()
         return False
 
+    def _note(self, header: dict) -> None:
+        long_limit = _as_int(header.get("long_limit"))
+        long_left = _as_int(header.get("long_remaining"))
+        if long_limit and long_limit > 0 and long_left is not None:
+            self._usage = (long_limit - max(long_left, 0), long_limit)
+
     def _pause_daily(self) -> None:
+        # used up, even if the answer that says so carries no numbers
+        if self._usage is not None:
+            self._usage = (self._usage[1], self._usage[1])
         until = self._clock() + LONG_WINDOW_RETRY_SECONDS
         if until > self._daily_until:
             logger.info("SauceNAO daily limit reached, pausing searches for %.0f s", LONG_WINDOW_RETRY_SECONDS)

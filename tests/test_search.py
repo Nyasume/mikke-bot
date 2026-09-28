@@ -8,7 +8,7 @@ from aiogram.methods import GetFile
 from mikke import texts
 from mikke.keys import UserKey
 from mikke.media import Media
-from mikke.reports import Outcome
+from mikke.reports import Outcome, Quota
 from mikke.saucenao import SEARCH_URL
 from mikke.search import ADD_KEY_CALLBACK, CACHE_TTL_SECONDS, Asker, KeyLocks
 from payloads import (
@@ -91,7 +91,11 @@ async def test_no_result_is_cached_and_offers_fallback_links(respx_mock, harness
         in answer.keyboard.inline_keyboard[0][0].url
     )
     assert (again.text, again.keyboard) == (answer.text, answer.keyboard)
-    assert (answer.outcome, again.outcome) == (Outcome("not_found"), Outcome("not_found", cached=True))
+    shared = Quota(10, 100, "shared key")
+    assert (answer.outcome, again.outcome) == (
+        Outcome("not_found", quota=shared),
+        Outcome("not_found", cached=True, quota=shared),
+    )
     assert route.call_count == 1
 
 
@@ -103,7 +107,7 @@ async def test_daily_quota_used_up_answers_at_once_without_download_or_api(respx
     answer = await harness.searcher.search_file(harness.bot, PHOTO)
 
     assert answer.text == texts.LIMIT_REACHED
-    assert answer.outcome == Outcome("limit")
+    assert answer.outcome == Outcome("limit", quota=Quota(100, 100, "shared key"))
     assert answer.keyboard.inline_keyboard[0][0].text == "Google Lens"
     assert route.call_count == 1
     assert len(harness.session.requests) == requests_before  # not even getFile
@@ -396,6 +400,92 @@ async def test_an_own_keys_30_second_line_does_not_spill_into_the_shared_one(res
     assert answer.text == texts.LIMIT_REACHED
     assert answer.outcome == Outcome("limit", key="own")
     assert set(_keys_used(route)) == {USER_KEY}
+
+
+# --- the quota, for the owner report ------------------------------------------
+
+
+def _own_and_shared(respx_mock):
+    """The user's key has 3 of 100 searches used, the shared one 57."""
+    return respx_mock.post(SEARCH_URL).mock(
+        side_effect=_by_key(
+            {
+                USER_KEY: httpx.Response(200, json=sauce_response([ANIME], long_remaining=97)),
+                API_KEY: httpx.Response(200, json=sauce_response([ANIME], long_remaining=43)),
+            }
+        )
+    )
+
+
+async def test_the_quota_is_the_one_the_answer_to_this_search_carried(respx_mock, harness):
+    respx_mock.post(SEARCH_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=sauce_response([ANIME], long_remaining=43)),
+            httpx.Response(200, json=sauce_response([], long_remaining=42)),
+        ]
+    )
+
+    first = await harness.searcher.search_file(harness.bot, PHOTO)
+    second = await harness.searcher.search_file(harness.bot, Media("b-id", "b-u", "photo", "b-id"))
+
+    assert first.outcome.quota == Quota(57, 100, "shared key")
+    assert second.outcome.quota == Quota(58, 100, "shared key")
+
+
+async def test_an_own_key_shows_its_own_quota(respx_mock, harness):
+    _own_and_shared(respx_mock)
+    await harness.keys.set(7, USER_KEY)
+
+    own = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7))
+    shared = await harness.searcher.search_file(harness.bot, Media("b-id", "b-u", "photo", "b-id"), Asker(8))
+
+    assert own.outcome.quota == Quota(3, 100, "own key")
+    assert shared.outcome.quota == Quota(57, 100, "shared key")
+
+
+async def test_an_own_key_used_up_shows_the_shared_quota_that_stood_in(respx_mock, harness):
+    respx_mock.post(SEARCH_URL).mock(
+        side_effect=_by_key(
+            {
+                USER_KEY: httpx.Response(429, json=DAILY_LIMIT),
+                API_KEY: httpx.Response(200, json=sauce_response([ANIME], long_remaining=43)),
+            }
+        )
+    )
+    await harness.keys.set(7, USER_KEY)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7))
+
+    assert (answer.outcome.key, answer.outcome.quota) == ("used_up", Quota(57, 100, "shared key"))
+
+
+async def test_a_cache_hit_shows_the_shared_quota_once_it_is_known(respx_mock, harness):
+    _own_and_shared(respx_mock)
+    await harness.keys.set(7, USER_KEY)
+
+    await harness.searcher.search_file(harness.bot, PHOTO, Asker(7))
+    # found with the user's key: the shared one has not answered yet
+    unknown = await harness.searcher.search_file(harness.bot, PHOTO)
+    await harness.searcher.search_file(harness.bot, Media("b-id", "b-u", "photo", "b-id"))
+    # no key was asked, not even for someone with a key of their own
+    known = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7))
+
+    assert (unknown.outcome.cached, unknown.outcome.quota) == (True, None)
+    assert (known.outcome.cached, known.outcome.quota) == (True, Quota(57, 100, "shared key"))
+
+
+async def test_a_daily_limit_without_numbers_shows_the_quota_used_up(respx_mock, harness):
+    respx_mock.post(SEARCH_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=sauce_response([], long_remaining=3)),
+            httpx.Response(429, json=DAILY_LIMIT),
+        ]
+    )
+
+    await harness.searcher.search_file(harness.bot, PHOTO)
+    answer = await harness.searcher.search_file(harness.bot, Media("b-id", "b-u", "photo", "b-id"))
+
+    assert answer.outcome == Outcome("limit", quota=Quota(100, 100, "shared key"))
 
 
 # --- what a limit answer says ------------------------------------------------

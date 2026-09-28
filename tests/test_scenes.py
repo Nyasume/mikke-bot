@@ -6,9 +6,9 @@ from aiogram.methods import GetFile
 
 from mikke import texts
 from mikke.media import Media
-from mikke.reports import Hit
-from mikke.scenes import Alert, hit, render
-from mikke.tracemoe import SEARCH_URL
+from mikke.reports import Hit, Quota
+from mikke.scenes import Alert, SceneSearcher, hit, render
+from mikke.tracemoe import SEARCH_URL, TraceMoe
 from payloads import SCENE, trace_response
 
 PHOTO = Media("photo-file-id", "photo-unique", "photo", "photo-file-id")
@@ -184,3 +184,45 @@ async def test_presses_in_line_for_trace_moe_download_nothing_once_the_quota_is_
     assert first.outcome.status == second.outcome.status == "limit"
     # the second file is fetched only once its search has trace.moe's turn, and by then there is no quota
     assert [call.file_id for call in harness.session.calls(GetFile)] == ["photo-file-id"]
+
+
+# --- the quota, for the owner report -------------------------------------------
+
+
+async def test_the_quota_goes_into_the_outcome_cached_or_not(respx_mock, harness):
+    respx_mock.post(SEARCH_URL).respond(json=trace_response([SCENE], quota_used=11))
+
+    first = await harness.scenes.search(harness.bot, PHOTO)
+    cached = await harness.scenes.search(harness.bot, PHOTO)
+
+    assert first.outcome.quota == Quota(12, 100, "guest")
+    assert (cached.outcome.cached, cached.outcome.quota) == (True, Quota(12, 100, "guest"))
+
+
+async def test_no_quota_before_trace_moe_has_told_it(respx_mock, harness):
+    respx_mock.post(SEARCH_URL).respond(402, json={"error": "Concurrency limit exceeded"})
+
+    alert = await harness.scenes.search(harness.bot, PHOTO)
+
+    assert isinstance(alert, Alert)
+    assert alert.outcome.quota is None
+
+
+async def test_a_used_up_quota_stays_known_without_calling_trace_moe(respx_mock, harness):
+    depleted = {"quota": 100, "quotaUsed": 100, "error": "Search quota depleted (quota per 24 hours: 100, used: 100)"}
+    route = respx_mock.post(SEARCH_URL).respond(402, json=depleted)
+
+    await harness.scenes.search(harness.bot, PHOTO)
+    alert = await harness.scenes.search(harness.bot, Media("other-id", "other-unique", "photo", "other-id"))
+
+    assert route.call_count == 1
+    assert (alert.outcome.status, alert.outcome.quota) == ("limit", Quota(100, 100, "guest"))
+
+
+async def test_a_sponsors_key_is_named_but_not_shown(respx_mock, harness, http):
+    respx_mock.post(SEARCH_URL).respond(json=trace_response([SCENE], quota=1000, quota_used=11))
+
+    answer = await SceneSearcher(TraceMoe(http, "sponsor-key")).search(harness.bot, PHOTO)
+
+    assert answer.outcome.quota == Quota(12, 1000, "sponsor key")
+    assert "sponsor-key" not in repr(answer.outcome)

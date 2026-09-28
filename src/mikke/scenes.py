@@ -2,7 +2,7 @@
 
 import html
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from aiogram import Bot
@@ -11,7 +11,7 @@ from cachetools import TTLCache
 
 from mikke import texts
 from mikke.media import Media
-from mikke.reports import Hit, Outcome
+from mikke.reports import Hit, Outcome, Quota
 from mikke.results import keyboard
 from mikke.search import CACHE_SIZE, CACHE_TTL_SECONDS, Answer, InvalidFileError, KeyLocks, download
 from mikke.tracemoe import QuotaExceededError, TraceMoe
@@ -138,7 +138,19 @@ class SceneSearcher:
     async def search(self, bot: Bot, media: Media) -> Answer | Alert:
         # presses on the same image wait for the first one and find its answer cached
         async with self._locks.hold(media.file_unique_id):
-            return await self._search(bot, media)
+            return self._with_quota(await self._search(bot, media))
+
+    def _with_quota(self, result: Answer | Alert) -> Answer | Alert:
+        """The result, with the quota as trace.moe last reported it, for the owner report.
+
+        Nothing runs between trace.moe's answer and this, so a search gets the numbers
+        that came with it; a cached answer or a used up quota gets the last ones known.
+        """
+        if (usage := self._tracemoe.usage) is None:
+            return result
+        used, limit = usage
+        quota = Quota(used, limit, "sponsor key" if self._tracemoe.sponsored else "guest")
+        return replace(result, outcome=replace(result.outcome, quota=quota))
 
     async def _search(self, bot: Bot, media: Media) -> Answer | Alert:
         key = media.file_unique_id

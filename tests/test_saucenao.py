@@ -305,6 +305,41 @@ async def test_each_key_has_its_own_limits(respx_mock, saucenao, uploads, http, 
     assert saucenao.with_key(API_KEY) is saucenao
 
 
+# --- the quota, for the owner reports -----------------------------------------
+
+
+async def test_usage_is_what_the_latest_answer_said(respx_mock, saucenao, uploads):
+    respx_mock.post(SEARCH_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=sauce_response([], long_remaining=43)),
+            httpx.Response(200, json=sauce_response([], long_remaining=42)),
+        ]
+    )
+    assert saucenao.usage is None
+
+    await saucenao.search(upload=uploads())
+    assert saucenao.usage == (57, 100)
+    await saucenao.search(upload=uploads())
+    assert saucenao.usage == (58, 100)
+    # every key has its own
+    assert saucenao.with_key("another-key").usage is None
+
+
+async def test_a_daily_429_marks_the_day_used_up(respx_mock, saucenao, uploads):
+    respx_mock.post(SEARCH_URL).mock(
+        side_effect=[
+            httpx.Response(200, json=sauce_response([], long_remaining=3)),
+            httpx.Response(429, json=DAILY_LIMIT),
+        ]
+    )
+
+    await saucenao.search(upload=uploads())
+    with pytest.raises(QuotaExceededError):
+        await saucenao.search(upload=uploads())
+
+    assert saucenao.usage == (100, 100)
+
+
 async def test_error_texts_hide_the_key(respx_mock, saucenao, uploads):
     respx_mock.post(SEARCH_URL).respond(500, text=f"Internal error for key {API_KEY}")
 

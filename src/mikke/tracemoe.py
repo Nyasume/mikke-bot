@@ -41,6 +41,18 @@ class TraceMoe:
         self._blocked_until = 0.0
         # A second search sent while one is running fails with "Concurrency limit exceeded"
         self._lock = asyncio.Lock()
+        # (used, limit) of the quota as trace.moe last reported it, for the owner reports
+        self._usage: tuple[int, int] | None = None
+
+    @property
+    def sponsored(self) -> bool:
+        """Searching with a sponsor's key rather than as a guest."""
+        return bool(self._headers)
+
+    @property
+    def usage(self) -> tuple[int, int] | None:
+        """How much of the quota trace.moe last said was used: (used, limit); None before its first answer."""
+        return self._usage
 
     @property
     def exhausted(self) -> bool:
@@ -71,6 +83,8 @@ class TraceMoe:
         with contextlib.suppress(ValueError):
             data = response.json()
         error = str(data.get("error") or "") if isinstance(data, dict) else ""
+        if isinstance(data, dict):
+            self._track(data, searched=not (response.is_error or error))
         # 402 is also "Concurrency limit exceeded", which is not worth a pause
         if response.status_code == 402 and "quota" in error.lower():
             logger.info("trace.moe quota used up, pausing scene searches for %.0f s", QUOTA_RETRY_SECONDS)
@@ -81,3 +95,9 @@ class TraceMoe:
         if not isinstance(data, dict):
             raise TraceMoeError(f"not JSON: {response.text[:300]}")
         return data.get("result") or []
+
+    def _track(self, data: dict, *, searched: bool) -> None:
+        # results and "Search quota depleted" carry it; quotaUsed does not count the search it answers yet
+        quota, used = data.get("quota"), data.get("quotaUsed")
+        if isinstance(quota, int) and isinstance(used, int) and quota > 0:
+            self._usage = (used + 1 if searched else used, quota)

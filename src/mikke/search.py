@@ -3,7 +3,7 @@ import contextlib
 import logging
 from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 
 import aiohttp
@@ -15,7 +15,7 @@ from cachetools import LRUCache, TTLCache
 from mikke import texts
 from mikke.keys import KeyStore, UserKey
 from mikke.media import Media
-from mikke.reports import KeyUse, Outcome
+from mikke.reports import KeyUse, Outcome, Quota
 from mikke.results import Scored, fallback_keyboard, hits, render, select
 from mikke.saucenao import InvalidKeyError, QuotaExceededError, SauceNao
 
@@ -92,6 +92,14 @@ class KeyLocks:
             self._users[key] -= 1
             if not self._users[key]:
                 del self._users[key], self._locks[key]
+
+
+def _with_quota(answer: Answer, sauce: SauceNao, whose: str) -> Answer:
+    """The answer, with the key's daily window as SauceNAO last reported it, for the owner report."""
+    if sauce.usage is None:
+        return answer
+    used, limit = sauce.usage
+    return replace(answer, outcome=replace(answer.outcome, quota=Quota(used, limit, whose)))
 
 
 @dataclass(frozen=True)
@@ -177,17 +185,21 @@ class Searcher:
     ) -> Answer:
         scored = self._cache.get(key)
         if scored is not None:
-            return self._result(scored, image_url, asker, cached=True)
+            # SauceNAO was not asked: what it last said about the shared key
+            return _with_quota(self._result(scored, image_url, asker, cached=True), self._saucenao, "shared key")
         own: KeyUse | None = None
         stored: UserKey | None = None
+        # the client that searched last: the report shows its quota
+        sauce = self._saucenao
         try:
             results: list[dict] = []
             keys = self._keys
             stored = await keys.get(asker.user_id) if asker and keys else None
             if asker and keys and stored and stored.valid:
                 own = "own"
+                sauce = self.saucenao(stored.api_key)
                 try:
-                    results = await query(self.saucenao(stored.api_key))
+                    results = await query(sauce)
                 except QuotaExceededError as e:
                     # the key's own 30-second line is too long: the shared one would be no better
                     if not e.daily:
@@ -197,24 +209,27 @@ class Searcher:
                     # searches that were already in line with the key find it rejected too; one tells the user
                     own = "rejected" if await keys.invalidate(asker.user_id, stored.api_key) else None
             if own != "own":
-                results = await query(self._saucenao)
+                sauce = self._saucenao
+                results = await query(sauce)
             scored = select(results)
             # shown before it is cached: a result that cannot be shown is one error, not a day of them
             answer = self._result(scored, image_url, asker, own=own)
         except QuotaExceededError:
-            return self._answer(texts.LIMIT_REACHED, Outcome("limit", key=own), fallback_keyboard(image_url), asker)
+            answer = self._answer(texts.LIMIT_REACHED, Outcome("limit", key=own), fallback_keyboard(image_url), asker)
         except InvalidFileError as e:
             logger.info("Invalid file %s: %s", key, e)
-            return self._answer(texts.INVALID_FILE, Outcome("invalid_file", error=str(e), key=own), None, asker)
+            answer = self._answer(texts.INVALID_FILE, Outcome("invalid_file", error=str(e), key=own), None, asker)
         except Exception as e:
             logger.exception("Search failed for %s", key)
             error = f"{type(e).__name__}: {e}"
             if stored is not None:
                 error = error.replace(stored.api_key, "[key]")
             failed = Outcome("error", error=error, key=own)
-            return self._answer(texts.ERROR, failed, fallback_keyboard(image_url), asker)
-        self._cache[key] = scored
-        return answer
+            answer = self._answer(texts.ERROR, failed, fallback_keyboard(image_url), asker)
+        else:
+            self._cache[key] = scored
+        # what SauceNAO sent with this search's answer (nothing ran since), or the last known numbers
+        return _with_quota(answer, sauce, "own key" if own == "own" else "shared key")
 
     def _result(
         self,

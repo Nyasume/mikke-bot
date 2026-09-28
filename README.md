@@ -40,7 +40,7 @@ uv run mikke
 
 `BOT_TOKEN` is the primary bot; `EXTRA_BOT_TOKENS` (comma-separated) adds more bots to the same process. `BOT_MODE=polling` (the default) is for local runs. Users' keys go to `./data/mikke.sqlite3` (`DATA_DIR`, gitignored). Production runs `BOT_MODE=webhook` in Docker: GitHub Actions tests every push, builds `main` into `ghcr.io/nyasume/mikke-bot`, and deploys when the CI workflow is run by hand with `deploy` checked. See `.env.example` for all settings.
 
-`ADMIN_IDS` get owner reports: an activity report for every search (`REPORT_RESULTS`), a rich message with the searched image, what Mikke found (or that she found nothing, ran out of searches or failed), who asked, in which chat, through which bot, whether the answer came from the cache and whether the user's own key searched; who added, removed or had a rejected key of their own (never the key); and every error (`REPORT_ERRORS`). When Telegram rejects the rich message, the report comes as plain text with the picture resent.
+`ADMIN_IDS` get owner reports: an activity report for every search (`REPORT_RESULTS`), a rich message with the searched image, what Mikke found (or that she found nothing, ran out of searches or failed), who asked, in which chat, through which bot, whether the answer came from the cache, whether the user's own key searched, and how much of the SauceNAO or trace.moe quota for the last 24 hours is used (the shared key's or the user's own, never the key); who added, removed or had a rejected key of their own (never the key); and every error (`REPORT_ERRORS`). When Telegram rejects the rich message, the report comes as plain text with the picture resent.
 
 The bot's HTTP server (port 8080) serves:
 

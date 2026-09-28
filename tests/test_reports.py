@@ -77,9 +77,9 @@ def _admin_messages(harness) -> list[SendMessage]:
     return [call for call in harness.session.calls(SendMessage) if call.chat_id == ADMIN_ID]
 
 
-def _sauce(chat: dict, **fields) -> tuple[dict, dict]:
+def _sauce(chat: dict, photo: list[dict] = PHOTO, **fields) -> tuple[dict, dict]:
     """A photo in `chat`, and ASKER's /sauce in reply to it."""
-    media_msg = message(chat, photo=PHOTO)
+    media_msg = message(chat, photo=photo)
     return media_msg, update(message(chat, text="/sauce", reply_to_message=media_msg, **{"from": ASKER}, **fields))
 
 
@@ -103,6 +103,7 @@ async def test_found_in_a_public_group(harness, found):
         '<p>👤 <a href="tg://user?id=1234567">Test User</a> · @test_user · <code>1234567</code></p>'
         '<p>💬 <a href="https://t.me/example_art">Anime Art &lt;Fans&gt;</a> · <code>-1001234567890</code>'
         f' · <a href="https://t.me/example_art/{media_msg["message_id"]}">message</a></p>'
+        "<p>📊 SauceNAO: 10/100 used (24 h) · shared key</p>"
         f'<footer>via @{BOT_USERNAME} · <a href="https://saucenao.com/search.php?url={IMG}photo-large-id">SauceNAO</a>'
         "</footer>"
     )
@@ -130,7 +131,10 @@ async def test_quota_used_up(harness, respx_mock):
 
     await harness.feed(update(message(photo=PHOTO)))
 
-    assert "<h3>⏳ SauceNAO: quota used up</h3>" in _report(harness)
+    html = _report(harness)
+    assert "<h3>⏳ SauceNAO: quota used up</h3>" in html
+    # SauceNAO has not told the numbers yet
+    assert "📊" not in html
 
 
 async def test_error_is_in_the_activity_report_alone(harness, respx_mock):
@@ -256,18 +260,22 @@ async def test_scene_search(harness, respx_mock):
     assert '<p>👤 <a href="tg://user?id=1234567">Test User</a>' in html
     assert f'<a href="https://t.me/example_art/{media_msg["message_id"]}">message</a>' in html
     assert f'<a href="https://trace.moe/?url={IMG}photo-large-id">trace.moe</a></footer>' in html
+    # quotaUsed 1 before this search
+    assert "<p>📊 trace.moe: 2/100 used (24 h) · guest</p><footer>" in html
     # the popup spinner stopped before the report went out
     [answer] = harness.session.calls(AnswerCallbackQuery)
     assert harness.session.requests.index(answer) < harness.session.requests.index(_reports(harness)[0])
 
 
 async def test_scene_quota_used_up(harness, respx_mock):
-    quota = {"error": "Search quota depleted (quota per 24 hours: 100, used: 100)"}
+    quota = {"quota": 100, "quotaUsed": 100, "error": "Search quota depleted (quota per 24 hours: 100, used: 100)"}
     respx_mock.post(TRACE_URL).respond(402, json=quota)
 
     await harness.feed(button_press(bot_answer(PRIVATE, message(photo=PHOTO))))
 
-    assert "<h3>⏳ trace.moe: quota used up</h3>" in _report(harness)
+    html = _report(harness)
+    assert "<h3>⏳ trace.moe: quota used up</h3>" in html
+    assert "<p>📊 trace.moe: 100/100 used (24 h) · guest</p>" in html
 
 
 async def test_scene_press_without_media_is_no_search(harness, respx_mock):
@@ -287,6 +295,46 @@ async def test_inline_search(harness, respx_mock):
     html = report.rich_message.html
     assert '<p>📥 inline mode · <a href="https://example.com/pic.jpg">image URL</a></p>' in html
     assert '<p>👤 <a href="tg://user?id=1234567">Test User</a> · @test_user · <code>1234567</code></p>' in html
+
+
+# --- the quota -----------------------------------------------------------------
+
+
+async def test_the_quota_shown_is_the_one_of_the_key_that_searched(harness, respx_mock):
+    responses = {
+        USER_KEY: httpx.Response(200, json=sauce_response([ANIME], long_remaining=97)),
+        API_KEY: httpx.Response(200, json=sauce_response([ANIME], long_remaining=43)),
+    }
+    respx_mock.post(SEARCH_URL).mock(side_effect=lambda request: responses[request.url.params["api_key"]])
+    await harness.keys.set(7, USER_KEY)
+    other_photo = [{"file_id": "other-id", "file_unique_id": "other-u", "width": 90, "height": 90}]
+
+    await harness.feed(update(message(photo=PHOTO)))
+    # ASKER has no key: the cache, before and after the shared key has answered once
+    for photo in (PHOTO, other_photo, PHOTO):
+        await harness.feed(_sauce(PUBLIC_GROUP, photo)[1])
+
+    own, unknown, shared, cached = (report.rich_message.html for report in _reports(harness))
+    assert "<p>📊 SauceNAO: 3/100 used (24 h) · own key</p>" in own
+    assert USER_KEY not in own
+    assert "💾 from the cache" in unknown
+    assert "📊" not in unknown
+    assert "<p>📊 SauceNAO: 57/100 used (24 h) · shared key</p>" in shared
+    assert "💾 from the cache" in cached
+    assert "<p>📊 SauceNAO: 57/100 used (24 h) · shared key</p>" in cached
+
+
+async def test_a_used_up_quota_is_shown_in_full(harness, respx_mock):
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME], long_remaining=0))
+
+    await harness.feed(update(message(photo=PHOTO)))
+    await harness.feed(update(message(sticker=STICKER)))
+
+    found, limit = (report.rich_message.html for report in _reports(harness))
+    assert "<p>📊 SauceNAO: 100/100 used (24 h) · shared key</p>" in found
+    assert "<h3>⏳ SauceNAO: quota used up</h3>" in limit
+    assert "<p>📊 SauceNAO: 100/100 used (24 h) · shared key</p>" in limit
+    assert route.call_count == 1
 
 
 # --- the plain report, when the rich one is rejected --------------------------
@@ -313,6 +361,7 @@ async def test_rejected_rich_report_falls_back_to_a_plain_one(harness, found, er
         '👤 <a href="tg://user?id=1234567">Test User</a> · @test_user · <code>1234567</code>\n'
         '💬 <a href="https://t.me/example_art">Anime Art &lt;Fans&gt;</a> · <code>-1001234567890</code>'
         f' · <a href="https://t.me/example_art/{media_msg["message_id"]}">message</a>\n'
+        "📊 SauceNAO: 10/100 used (24 h) · shared key\n"
         f'via @{BOT_USERNAME} · <a href="https://saucenao.com/search.php?url={IMG}photo-large-id">SauceNAO</a>'
     )
     # the picture, as a reply to its report
