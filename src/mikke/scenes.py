@@ -13,7 +13,7 @@ from mikke import texts
 from mikke.media import Media
 from mikke.reports import Hit, Outcome
 from mikke.results import keyboard
-from mikke.search import CACHE_SIZE, CACHE_TTL_SECONDS, Answer, InvalidFileError, download
+from mikke.search import CACHE_SIZE, CACHE_TTL_SECONDS, Answer, InvalidFileError, KeyLocks, download
 from mikke.tracemoe import QuotaExceededError, TraceMoe
 
 logger = logging.getLogger(__name__)
@@ -116,6 +116,14 @@ def hit(scene: Scene) -> Hit:
     return Hit(_titles(scene)[0], round(_similarity(scene) * 100, 1), tuple(_links(scene)))
 
 
+def _answer(best: list[Scene], cached: bool = False) -> Answer:
+    """The answer for the best scene, or for none."""
+    if not best:
+        return Answer(texts.SCENE_NOT_FOUND, Outcome("not_found", cached))
+    text, markup = render(best[0])
+    return Answer(text, Outcome("found", cached, (hit(best[0]),)), markup)
+
+
 class SceneSearcher:
     """Cache, then trace.moe, then the answer; only ever run when someone asks."""
 
@@ -125,28 +133,31 @@ class SceneSearcher:
         self._cache: TTLCache[str, list[Scene]] = (
             cache if cache is not None else TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS)
         )
+        self._locks = KeyLocks()
 
     async def search(self, bot: Bot, media: Media) -> Answer | Alert:
+        # presses on the same image wait for the first one and find its answer cached
+        async with self._locks.hold(media.file_unique_id):
+            return await self._search(bot, media)
+
+    async def _search(self, bot: Bot, media: Media) -> Answer | Alert:
         key = media.file_unique_id
         best = self._cache.get(key)
-        cached = best is not None
-        if best is None:
-            try:
-                # no point in downloading the file while the quota is used up
-                self._tracemoe.check_quota()
-                image, filename = await download(bot, media)
-                best = (await self._tracemoe.search(image, filename))[:1]
-            except QuotaExceededError:
-                return Alert(texts.SCENE_LIMIT, Outcome("limit"))
-            except InvalidFileError as e:
-                logger.info("Invalid file %s: %s", key, e)
-                return Alert(texts.SCENE_INVALID_FILE, Outcome("invalid_file", error=str(e)))
-            except Exception as e:
-                logger.exception("Scene search failed for %s", key)
-                return Alert(texts.SCENE_ERROR, Outcome("error", error=f"{type(e).__name__}: {e}"))
-            self._cache[key] = best
-
-        if not best:
-            return Answer(texts.SCENE_NOT_FOUND, Outcome("not_found", cached))
-        text, markup = render(best[0])
-        return Answer(text, Outcome("found", cached, (hit(best[0]),)), markup)
+        if best is not None:
+            return _answer(best, cached=True)
+        try:
+            # no point in waiting for a turn while the quota is used up
+            self._tracemoe.check_quota()
+            best = (await self._tracemoe.search(lambda: download(bot, media)))[:1]
+            # shown before it is cached: a scene that cannot be shown is one error, not a day of them
+            answer = _answer(best)
+        except QuotaExceededError:
+            return Alert(texts.SCENE_LIMIT, Outcome("limit"))
+        except InvalidFileError as e:
+            logger.info("Invalid file %s: %s", key, e)
+            return Alert(texts.SCENE_INVALID_FILE, Outcome("invalid_file", error=str(e)))
+        except Exception as e:
+            logger.exception("Scene search failed for %s", key)
+            return Alert(texts.SCENE_ERROR, Outcome("error", error=f"{type(e).__name__}: {e}"))
+        self._cache[key] = best
+        return answer

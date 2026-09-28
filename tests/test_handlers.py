@@ -1,7 +1,8 @@
+import asyncio
 import time
 
 import pytest
-from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter, TelegramServerError
 from aiogram.methods import (
     AnswerCallbackQuery,
     AnswerInlineQuery,
@@ -87,6 +88,18 @@ async def test_private_photo_is_searched_via_placeholder(harness, found):
         ({"sticker": {**STATIC_STICKER, "is_animated": True, "thumbnail": THUMB}}, "thumb-id"),
         ({"sticker": {**STATIC_STICKER, "is_video": True, "thumbnail": THUMB}}, "thumb-id"),
         ({"document": {"file_id": "doc-id", "file_unique_id": "doc-u", "file_name": "art.PNG"}}, "doc-id"),
+        # a GIF sent as a file stays a GIF, not the mp4 of an animation
+        (
+            {
+                "document": {
+                    "file_id": "gif-doc-id",
+                    "file_unique_id": "gif-doc-u",
+                    "file_name": "loop.gif",
+                    "mime_type": "image/gif",
+                }
+            },
+            "gif-doc-id",
+        ),
         (
             {
                 "animation": {"file_id": "gif-id", "file_unique_id": "gif-u", "width": 1, "height": 1, "duration": 1},
@@ -256,6 +269,15 @@ async def test_chosen_inline_result_searches_the_url_and_edits_the_inline_messag
     assert _layout(edit.reply_markup) == [["View on AniDB", "MAL", "AniList"]]
 
 
+async def test_flood_protection_ignores_more_than_20_inline_searches_in_3_seconds(harness, respx_mock):
+    respx_mock.get(SEARCH_URL).respond(json=sauce_response([ANIME]))
+
+    for _ in range(21):
+        await harness.feed(_chosen_inline_result("example.com/pic.jpg"))
+
+    assert len(harness.session.calls(EditMessageText)) == 20
+
+
 async def test_flood_protection_ignores_more_than_20_messages_in_3_seconds(harness, found):
     now = int(time.time())
     for _ in range(21):
@@ -285,6 +307,31 @@ async def test_unexpected_handler_error_is_reported(harness, found):
     report = _sent(harness)[-1]
     assert report.chat_id == ADMIN_ID
     assert "RuntimeError: telegram exploded" in report.text
+
+
+async def test_an_update_counts_for_shutdown_until_its_error_is_reported(harness, found, monkeypatch):
+    harness.session.errors[EditMessageText] = RuntimeError("telegram exploded")
+    reporting, release = asyncio.Event(), asyncio.Event()
+    make_request = harness.session.make_request
+
+    async def slow_reports(bot, method, timeout=None):  # noqa: ASYNC109
+        if isinstance(method, SendMessage) and method.chat_id == ADMIN_ID:
+            reporting.set()
+            await release.wait()
+        return await make_request(bot, method, timeout)
+
+    monkeypatch.setattr(harness.session, "make_request", slow_reports)
+    feeding = asyncio.create_task(harness.feed(update(message(photo=PHOTO))))
+    await reporting.wait()
+
+    # SIGTERM while the error report is on its way: shutdown waits for it too
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await harness.dp["in_flight"].wait(0.05)
+    assert loop.time() - started >= 0.05
+
+    release.set()
+    await feeding
 
 
 async def test_error_reports_can_be_switched_off(make_harness, found):
@@ -319,6 +366,25 @@ async def test_rejected_link_buttons_fall_back_to_the_text_and_the_scene_button(
     assert second.text == first.text
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        "Bad Request: message is not modified: specified new message content and reply markup are exactly the same",
+        "Bad Request: message to edit not found",
+    ],
+    ids=["not-modified", "deleted"],
+)
+async def test_an_edit_the_links_are_not_to_blame_for_keeps_them(harness, respx_mock, error):
+    # a duplicated update: the answer, links and all, is already there
+    respx_mock.get(SEARCH_URL).respond(json=sauce_response([ANIME]))
+    harness.session.fail_once[EditMessageText] = TelegramBadRequest(method=EditMessageText(text="x"), message=error)
+
+    await harness.feed(_chosen_inline_result("example.com/pic.jpg"))
+
+    [edit] = harness.session.calls(EditMessageText)
+    assert edit.reply_markup is not None
+
+
 async def test_rejected_buttons_on_an_inline_answer_fall_back_to_the_text_alone(harness, respx_mock):
     respx_mock.get(SEARCH_URL).respond(json=sauce_response([ANIME]))
     harness.session.fail_once[EditMessageText] = TelegramBadRequest(
@@ -341,6 +407,92 @@ async def test_rate_limited_edit_is_retried(harness, found):
 
     first, second = harness.session.calls(EditMessageText)
     assert second.reply_markup == first.reply_markup
+
+
+def _retry_after(seconds: int) -> TelegramRetryAfter:
+    return TelegramRetryAfter(method=EditMessageText(text="x"), message="Too Many Requests", retry_after=seconds)
+
+
+@pytest.fixture
+def slept(monkeypatch) -> list[float]:
+    """What the handlers slept for, without the wait."""
+    waits: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        waits.append(seconds)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    return waits
+
+
+def _fail_edits(harness, monkeypatch, *errors: Exception) -> None:
+    """The next edits fail with `errors`, one each, in order."""
+    queue = list(errors)
+    make_request = harness.session.make_request
+
+    async def failing(bot, method, timeout=None):  # noqa: ASYNC109
+        if isinstance(method, EditMessageText) and queue:
+            harness.session.requests.append(method)
+            raise queue.pop(0)
+        return await make_request(bot, method, timeout)
+
+    monkeypatch.setattr(harness.session, "make_request", failing)
+
+
+async def test_rate_limited_edit_waits_as_long_as_telegram_asks(harness, found, slept):
+    harness.session.fail_once[EditMessageText] = _retry_after(120)
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    assert slept == [120]
+    assert len(harness.session.calls(EditMessageText)) == 2
+
+
+async def test_rate_limited_twice_gives_up_without_waiting_again(harness, found, slept):
+    harness.session.errors[EditMessageText] = _retry_after(5)
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    assert slept == [5]
+    assert len(harness.session.calls(EditMessageText)) == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TelegramNetworkError(method=EditMessageText(text="x"), message="HTTP Client says - Request timeout error"),
+        TelegramServerError(method=EditMessageText(text="x"), message="Bad Gateway"),
+    ],
+    ids=["network", "server"],
+)
+async def test_an_edit_that_meets_a_passing_telegram_failure_is_retried(harness, found, slept, monkeypatch, error):
+    _fail_edits(harness, monkeypatch, error)
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    first, second = harness.session.calls(EditMessageText)
+    assert (second.text, second.reply_markup) == (first.text, first.reply_markup)
+
+
+async def test_an_edit_failing_twice_on_telegram_gives_up(harness, found, slept, monkeypatch):
+    error = TelegramServerError(method=EditMessageText(text="x"), message="Bad Gateway")
+    _fail_edits(harness, monkeypatch, error, error, error)
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    assert len(harness.session.calls(EditMessageText)) == 2
+
+
+async def test_rejected_links_and_then_flood_control_still_end_in_the_answer(harness, found, slept, monkeypatch):
+    bad_request = TelegramBadRequest(method=EditMessageText(text="x"), message="Bad Request: BUTTON_URL_INVALID")
+    _fail_edits(harness, monkeypatch, bad_request, _retry_after(3))
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    first, second, third = harness.session.calls(EditMessageText)
+    assert slept == [3]
+    assert _layout(second.reply_markup) == _layout(third.reply_markup) == [["🎬 Anime scene"]]
+    assert third.text == first.text
 
 
 # --- 🎬 Anime scene -------------------------------------------------------------
@@ -492,11 +644,14 @@ async def test_scene_answer_after_telegram_stopped_waiting_is_not_an_error(harne
     assert reply.chat_id == PRIVATE["id"]
 
 
-async def test_other_buttons_do_not_search(harness, scene_found):
+async def test_the_loading_button_is_answered_and_searches_nothing(harness, scene_found):
     await harness.feed(button_press(bot_answer(PRIVATE, message(photo=PHOTO)), data="noop"))
 
     assert scene_found.call_count == 0
-    assert harness.session.requests == []
+    # answered, so the client stops showing its own spinner on the 🔍
+    [answer] = harness.session.requests
+    assert isinstance(answer, AnswerCallbackQuery)
+    assert (answer.text, answer.show_alert) == (None, False)
 
 
 async def test_flood_protection_limits_scene_presses_harder(harness, scene_found):
@@ -504,5 +659,9 @@ async def test_flood_protection_limits_scene_presses_harder(harness, scene_found
     for _ in range(6):
         await harness.feed(button_press(answer))
 
-    assert len(harness.session.calls(AnswerCallbackQuery)) == 5
     assert scene_found.call_count == 1
+    # the dropped press is still answered, so its button stops spinning
+    answers = harness.session.calls(AnswerCallbackQuery)
+    assert len(answers) == 6
+    assert answers[-1].text is None
+    assert not answers[-1].show_alert

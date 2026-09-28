@@ -1,5 +1,8 @@
+import asyncio
+import contextlib
 import logging
-from collections.abc import Awaitable, Callable
+from collections import Counter
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -64,6 +67,33 @@ async def download(bot: Bot, media: Media) -> tuple[bytes, str]:
     return data.getvalue(), PurePosixPath(file.file_path).name
 
 
+class KeyLocks:
+    """A lock per cache key: searches of the same image run one after another, so the later
+    ones find the first one's answer in the cache instead of spending the quota again.
+
+    A key's lock exists only while someone holds it or waits for it.
+    """
+
+    def __init__(self) -> None:
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._users: Counter[str] = Counter()
+
+    def __len__(self) -> int:
+        return len(self._locks)
+
+    @contextlib.asynccontextmanager
+    async def hold(self, key: str) -> AsyncIterator[None]:
+        lock = self._locks.setdefault(key, asyncio.Lock())
+        self._users[key] += 1
+        try:
+            async with lock:
+                yield
+        finally:
+            self._users[key] -= 1
+            if not self._users[key]:
+                del self._users[key], self._locks[key]
+
+
 @dataclass(frozen=True)
 class Asker:
     """The user a search is for: their own SauceNAO key is used if they have one."""
@@ -93,6 +123,7 @@ class Searcher:
         self._cache: TTLCache[str, list[Scored]] = (
             cache if cache is not None else TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS)
         )
+        self._locks = KeyLocks()
 
     def image_url(self, bot: Bot, file_id: str) -> str | None:
         """Public, token-free link to a Telegram file, served by our own /img/ route.
@@ -132,44 +163,69 @@ class Searcher:
         asker: Asker | None,
         query: Callable[[SauceNao], Awaitable[list[dict]]],
     ) -> Answer:
-        scored = self._cache.get(key)
-        cached = scored is not None
-        own: KeyUse | None = None
-        if scored is None:
-            stored: UserKey | None = None
-            try:
-                results: list[dict] = []
-                keys = self._keys
-                stored = await keys.get(asker.user_id) if asker and keys else None
-                if asker and keys and stored and stored.valid:
-                    own = "own"
-                    try:
-                        results = await query(self.saucenao(stored.api_key))
-                    except QuotaExceededError as e:
-                        # the key's own 30-second line is too long: the shared one would be no better
-                        if not e.daily:
-                            raise
-                        own = "used_up"
-                    except InvalidKeyError:
-                        # searches that were already in line with the key find it rejected too; one tells the user
-                        own = "rejected" if await keys.invalidate(asker.user_id, stored.api_key) else None
-                if own != "own":
-                    results = await query(self._saucenao)
-                scored = select(results)
-            except QuotaExceededError:
-                return self._answer(texts.LIMIT_REACHED, Outcome("limit", key=own), fallback_keyboard(image_url), asker)
-            except InvalidFileError as e:
-                logger.info("Invalid file %s: %s", key, e)
-                return self._answer(texts.INVALID_FILE, Outcome("invalid_file", error=str(e), key=own), None, asker)
-            except Exception as e:
-                logger.exception("Search failed for %s", key)
-                error = f"{type(e).__name__}: {e}"
-                if stored is not None:
-                    error = error.replace(stored.api_key, "[key]")
-                failed = Outcome("error", error=error, key=own)
-                return self._answer(texts.ERROR, failed, fallback_keyboard(image_url), asker)
-            self._cache[key] = scored
+        # one at a time per image: a search that waited finds the answer cached, or,
+        # if the first one failed, which is never cached, searches with its own asker's key
+        async with self._locks.hold(key):
+            return await self._lookup(key, image_url, asker, query)
 
+    async def _lookup(
+        self,
+        key: str,
+        image_url: str | None,
+        asker: Asker | None,
+        query: Callable[[SauceNao], Awaitable[list[dict]]],
+    ) -> Answer:
+        scored = self._cache.get(key)
+        if scored is not None:
+            return self._result(scored, image_url, asker, cached=True)
+        own: KeyUse | None = None
+        stored: UserKey | None = None
+        try:
+            results: list[dict] = []
+            keys = self._keys
+            stored = await keys.get(asker.user_id) if asker and keys else None
+            if asker and keys and stored and stored.valid:
+                own = "own"
+                try:
+                    results = await query(self.saucenao(stored.api_key))
+                except QuotaExceededError as e:
+                    # the key's own 30-second line is too long: the shared one would be no better
+                    if not e.daily:
+                        raise
+                    own = "used_up"
+                except InvalidKeyError:
+                    # searches that were already in line with the key find it rejected too; one tells the user
+                    own = "rejected" if await keys.invalidate(asker.user_id, stored.api_key) else None
+            if own != "own":
+                results = await query(self._saucenao)
+            scored = select(results)
+            # shown before it is cached: a result that cannot be shown is one error, not a day of them
+            answer = self._result(scored, image_url, asker, own=own)
+        except QuotaExceededError:
+            return self._answer(texts.LIMIT_REACHED, Outcome("limit", key=own), fallback_keyboard(image_url), asker)
+        except InvalidFileError as e:
+            logger.info("Invalid file %s: %s", key, e)
+            return self._answer(texts.INVALID_FILE, Outcome("invalid_file", error=str(e), key=own), None, asker)
+        except Exception as e:
+            logger.exception("Search failed for %s", key)
+            error = f"{type(e).__name__}: {e}"
+            if stored is not None:
+                error = error.replace(stored.api_key, "[key]")
+            failed = Outcome("error", error=error, key=own)
+            return self._answer(texts.ERROR, failed, fallback_keyboard(image_url), asker)
+        self._cache[key] = scored
+        return answer
+
+    def _result(
+        self,
+        scored: list[Scored],
+        image_url: str | None,
+        asker: Asker | None,
+        *,
+        cached: bool = False,
+        own: KeyUse | None = None,
+    ) -> Answer:
+        """The answer for the accepted matches, or for none."""
         if not scored:
             outcome = Outcome("not_found", cached, key=own)
             return self._answer(texts.NO_RESULT, outcome, fallback_keyboard(image_url), asker)

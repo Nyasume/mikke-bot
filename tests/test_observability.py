@@ -16,7 +16,7 @@ from sentry_sdk.transport import Transport
 
 from mikke import texts
 from mikke.config import Settings, derive_secret
-from mikke.observability import FILTERED, Scrubber, init_sentry
+from mikke.observability import FILTERED, Scrubber, init_sentry, redact
 from mikke.saucenao import SEARCH_URL, QuotaExceededError
 from mikke.tracemoe import SEARCH_URL as TRACE_URL
 from mikke.web import build_app
@@ -187,6 +187,27 @@ def test_scrubber_catches_tokens_and_keys_it_was_not_given():
     # a user's own key, in the text of their command
     assert scrub.text(f"text='/apikey {USER_KEY}'") == f"text='/apikey {FILTERED}'"
     assert scrub.text(f"/APIKEY@{BOT_USERNAME}  {USER_KEY} x") == f"/APIKEY@{BOT_USERNAME}  {FILTERED} x"
+
+
+def test_scrubber_keeps_the_searched_images_out_but_not_the_rest():
+    scrub = Scrubber([])
+    # a file_id opens the user's picture through /img/; the route and the bot stay
+    assert scrub.text("getFile failed for /img/4200000001/AgACAgIAAxkBAAI-x_1: wrong file_id") == (
+        f"getFile failed for /img/4200000001/{FILTERED}: wrong file_id"
+    )
+    assert scrub.text("https://example.org/mikke/img/AgACAgIAAxkBAAI") == f"https://example.org/mikke/img/{FILTERED}"
+    # an inline search's URL is whatever the user sent
+    assert scrub.text("output_type=2&db=999&url=https%3A%2F%2Fexample.com%2Fme.png") == (
+        f"output_type=2&db=999&url={FILTERED}"
+    )
+    assert scrub.text("Search failed for url:https://example.com/me.png") == f"Search failed for url:{FILTERED}"
+    # file_unique_ids fetch nothing
+    assert scrub.text("Search failed for AQADa8sxG_x") == "Search failed for AQADa8sxG_x"
+    # scrubbing twice (the breadcrumb, then the event) changes nothing more
+    once = scrub.text("/img/4200000001/AgACAgIAAxkBAAI url:https://a.b/c url=d")
+    assert scrub.text(once) == once == f"/img/4200000001/{FILTERED} url:{FILTERED} url={FILTERED}"
+    # Sentry only: the logs keep them
+    assert redact("getFile failed for /img/42/AgACAgIAAxkBAAI") == "getFile failed for /img/42/AgACAgIAAxkBAAI"
 
 
 async def test_secrets_never_reach_sentry(sentry, caplog):
@@ -396,6 +417,38 @@ async def test_img_route_error_is_sent_once(sentry, monkeypatch):
     [event] = transport.events
     assert event["exception"]["values"][-1]["type"] == "RuntimeError"
     _assert_no_secrets(transport.sent)
+
+
+async def test_a_failed_inline_search_reaches_sentry_without_the_searched_url(sentry, respx_mock):
+    harness, transport = sentry()
+    respx_mock.get(SEARCH_URL).respond(500, text="Internal Server Error")
+
+    await harness.searcher.search_url("https://example.com/private-pic.png")
+
+    [event] = transport.events
+    assert "private-pic" not in transport.sent
+    assert event["logentry"]["formatted"] == f"Search failed for url:{FILTERED}"
+    [request] = [crumb["data"] for crumb in event["breadcrumbs"]["values"] if crumb["type"] == "http"]
+    assert request["http.query"].endswith(f"&url={FILTERED}")
+
+
+async def test_img_route_errors_reach_sentry_without_the_file_id(sentry, monkeypatch):
+    harness, transport = sentry()
+
+    async def broken_get_file(file_id):
+        raise RuntimeError("getFile exploded")
+
+    monkeypatch.setattr(harness.bot, "get_file", broken_get_file)
+    client = await _client(harness)
+    try:
+        response = await client.get("/img/42/private-file-id")
+    finally:
+        await client.close()
+
+    assert response.status == 500
+    [event] = transport.events
+    assert "private-file-id" not in transport.sent
+    assert event["request"]["url"].endswith(f"/img/42/{FILTERED}")
 
 
 # --- what is not sent --------------------------------------------------------

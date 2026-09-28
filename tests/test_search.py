@@ -10,7 +10,7 @@ from mikke.keys import UserKey
 from mikke.media import Media
 from mikke.reports import Outcome
 from mikke.saucenao import SEARCH_URL
-from mikke.search import ADD_KEY_CALLBACK, CACHE_TTL_SECONDS, Asker
+from mikke.search import ADD_KEY_CALLBACK, CACHE_TTL_SECONDS, Asker, KeyLocks
 from payloads import (
     ANIME,
     API_KEY,
@@ -205,6 +205,90 @@ async def test_download_failure_keeps_the_token_out_of_the_outcome_and_logs(resp
     assert route.call_count == 0
     assert answer.outcome.error == "DownloadError: ClientResponseError HTTP 502"
     assert BOT_TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize("data", [["not", "a", "mapping"], {"title": "Art", "ext_urls": 5}], ids=["list", "ext-urls"])
+async def test_a_result_that_cannot_be_shown_is_an_error_and_is_not_cached(respx_mock, harness, data):
+    route = respx_mock.post(SEARCH_URL).respond(
+        json=sauce_response([{"header": {"similarity": "95.00"}, "data": data}])
+    )
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO)
+    await harness.searcher.search_file(harness.bot, PHOTO)
+
+    assert (answer.text, answer.outcome.status) == (texts.ERROR, "error")
+    assert route.call_count == 2
+
+
+# --- the same image, searched at the same time ---------------------------------
+
+
+async def test_concurrent_searches_of_the_same_image_ask_saucenao_once(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME]))
+    harness.session.slow = True
+
+    first, second = await asyncio.gather(
+        harness.searcher.search_file(harness.bot, PHOTO),
+        # forwarded again: another file_id, the same file_unique_id
+        harness.searcher.search_file(harness.bot, Media("another-id", "photo-unique", "photo", "another-id")),
+    )
+
+    assert route.call_count == 1
+    assert len(harness.session.calls(GetFile)) == 1
+    assert (first.outcome.cached, second.outcome.cached) == (False, True)
+    assert (second.text, second.keyboard) == (first.text, first.keyboard)
+
+
+@pytest.mark.parametrize(
+    ("shared", "fail_download", "status"),
+    [
+        (httpx.Response(500, text="boom"), False, "error"),
+        (httpx.Response(429, json=DAILY_LIMIT), False, "limit"),
+        (httpx.Response(200, json=sauce_response([ANIME])), True, "invalid_file"),
+    ],
+    ids=["error", "limit", "invalid-file"],
+)
+async def test_a_search_that_waited_for_a_failed_one_runs_its_own_with_its_own_key(
+    respx_mock, harness, shared, fail_download, status
+):
+    route = respx_mock.post(SEARCH_URL).mock(
+        side_effect=_by_key({API_KEY: shared, USER_KEY: httpx.Response(200, json=sauce_response([ANIME]))})
+    )
+    await harness.keys.set(7, USER_KEY)
+    harness.session.slow = True
+    if fail_download:
+        harness.session.fail_once[GetFile] = TelegramBadRequest(method=GetFile(file_id="x"), message="file is too big")
+
+    automatic, asked = await asyncio.gather(
+        harness.searcher.search_file(harness.bot, PHOTO),
+        harness.searcher.search_file(harness.bot, PHOTO, Asker(7)),
+    )
+
+    # nothing of the first one was cached, so the second one searched again, with the key of whoever asked
+    assert automatic.outcome.status == status
+    assert (asked.outcome.status, asked.outcome.cached, asked.outcome.key) == ("found", False, "own")
+    assert _keys_used(route)[-1] == USER_KEY
+
+
+async def test_a_lock_per_image_lives_only_while_it_is_held_or_waited_for():
+    locks = KeyLocks()
+    order = []
+
+    async def search(name: str) -> None:
+        async with locks.hold("photo-unique"):
+            order.append(name)
+            await asyncio.sleep(0)
+
+    first = asyncio.create_task(search("first"))
+    second = asyncio.create_task(search("second"))
+    cancelled = asyncio.create_task(search("cancelled"))
+    await asyncio.sleep(0)
+    assert len(locks) == 1
+    cancelled.cancel()
+    await asyncio.gather(first, second, cancelled, return_exceptions=True)
+
+    assert order == ["first", "second"]
+    assert len(locks) == 0
 
 
 # --- whose key ---------------------------------------------------------------

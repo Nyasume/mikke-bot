@@ -180,6 +180,33 @@ async def test_a_failed_download_gives_its_slot_back(respx_mock, saucenao, uploa
     assert uploads.times == [START] * 4
 
 
+async def test_a_slot_given_back_while_a_search_waits_for_one_is_used_soon(respx_mock, saucenao, uploads, clock):
+    respx_mock.post(SEARCH_URL).respond(json=sauce_response([], short_remaining=3))
+    release = asyncio.Event()
+
+    def slow_upload(fails: bool):
+        async def upload() -> tuple[bytes, str]:
+            await release.wait()
+            if fails:
+                raise RuntimeError("download failed")
+            return IMAGE, "image.jpg"
+
+        return upload
+
+    # four searches take the window's four slots and are still downloading
+    downloading = [asyncio.create_task(saucenao.search(upload=slow_upload(fails=n == 0))) for n in range(4)]
+    await asyncio.sleep(0)
+    # the fifth waits for a slot; then one of the four downloads fails and gives its slot back
+    waiting = asyncio.create_task(saucenao.search(upload=uploads()))
+    await asyncio.sleep(0)
+    release.set()
+    await asyncio.gather(*downloading, waiting, return_exceptions=True)
+
+    [uploaded_at] = uploads.times
+    assert uploaded_at < START + SHORT_WINDOW_SECONDS
+    assert uploaded_at <= START + 2
+
+
 # --- the daily window --------------------------------------------------------
 
 
@@ -286,6 +313,30 @@ async def test_error_texts_hide_the_key(respx_mock, saucenao, uploads):
 
     assert API_KEY not in str(raised.value)
     assert "[key]" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [(200, 1, SauceNaoError), (200, -3, None), (403, -1, InvalidKeyError)],
+    ids=["server-side", "client-side", "rejected"],
+)
+async def test_status_messages_hide_the_key(respx_mock, saucenao, uploads, caplog, answer):
+    status_code, status, raises = answer
+    header = {"status": status, "message": f"Something about key {API_KEY}."}
+    respx_mock.post(SEARCH_URL).respond(status_code, json={"header": header, "results": []})
+    caplog.set_level("INFO", logger="mikke")
+
+    try:
+        await saucenao.search(upload=uploads())
+    except Exception as e:
+        assert type(e) is raises
+        assert API_KEY not in str(e)
+    else:
+        assert raises is None
+
+    logged = " ".join(record.getMessage() for record in caplog.records if record.name.startswith("mikke"))
+    assert API_KEY not in logged
+    assert "[key]" in logged
 
 
 # --- answers -----------------------------------------------------------------

@@ -24,6 +24,9 @@ DEFAULT_SHORT_LIMIT = 4
 # How long a search may wait for its turn. A search expected to wait longer ends as "limit" at once;
 # one let in may still be pushed back by slow downloads or a 429, but by one more window at most.
 MAX_WAIT_SECONDS = 60.0
+# A search waiting for its slot looks again this often: a slot given back by a failed
+# download, or a key rejected or used up meanwhile, is noticed at once
+LINE_CHECK_SECONDS = 1.0
 
 ACCOUNT_TYPES = {1: "Basic (free)", 2: "Premium"}
 
@@ -115,12 +118,13 @@ class SauceNao:
         header = data.get("header") or {}
         results = data.get("results") or []
         status = _as_int(header.get("status")) or 0
+        message = self._hide(str(header.get("message")))
         if status != 0:
-            logger.info("SauceNAO status %s: %s", status, header.get("message"))
+            logger.info("SauceNAO status %s: %s", status, message)
         # status > 0 is a server-side failure; with partial results (some indexes
         # down) the results are still usable
         if status > 0 and not results:
-            raise SauceNaoError(f"status {status}: {header.get('message')}")
+            raise SauceNaoError(f"status {status}: {message}")
         return results
 
     async def account(self) -> Account:
@@ -164,7 +168,8 @@ class SauceNao:
                 continue
             if response.status_code == 403 and data is not None:
                 # SauceNAO's JSON answer to an unknown key; Cloudflare's challenge page is HTML
-                logger.info("SauceNAO rejected an API key: %s", (data.get("header") or {}).get("message"))
+                message = (data.get("header") or {}).get("message")
+                logger.info("SauceNAO rejected an API key: %s", self._hide(str(message)))
                 self._rejected_until = self._clock() + LONG_WINDOW_RETRY_SECONDS
                 raise InvalidKeyError
             if response.is_error:
@@ -187,7 +192,7 @@ class SauceNao:
                 while (ready := self._turn()) > self._clock():
                     if ready > deadline + SHORT_WINDOW_SECONDS:
                         raise QuotaExceededError
-                    await self._sleep(ready - self._clock())
+                    await self._sleep(min(ready - self._clock(), LINE_CHECK_SECONDS))
                     self._check()
                 now = self._clock()
                 self._sent.append(now)

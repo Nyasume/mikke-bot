@@ -1,5 +1,7 @@
 """Users' own SauceNAO keys in SQLite."""
 
+import stat
+
 import pytest
 
 from mikke.keys import KeyStore, UserKey
@@ -66,3 +68,23 @@ def test_only_the_tail_of_a_key_is_ever_shown():
     assert key.masked == "…a1b2"
     assert KEY not in repr(key)
     assert KEY not in str(key)
+
+
+def test_the_keys_are_readable_by_their_owner_only(tmp_path):
+    path = tmp_path / "data" / "mikke.sqlite3"
+
+    KeyStore(path)
+
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_a_key_file_made_before_is_made_the_owners_alone(tmp_path):
+    path = tmp_path / "data" / "mikke.sqlite3"
+    path.parent.mkdir()
+    path.touch(mode=0o644)
+    path.chmod(0o644)
+
+    KeyStore(path)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

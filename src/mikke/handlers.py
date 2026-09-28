@@ -7,7 +7,13 @@ from typing import Any
 import sentry_sdk
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
-from aiogram.exceptions import TelegramAPIError, TelegramBadRequest, TelegramRetryAfter
+from aiogram.exceptions import (
+    TelegramAPIError,
+    TelegramBadRequest,
+    TelegramNetworkError,
+    TelegramRetryAfter,
+    TelegramServerError,
+)
 from aiogram.filters import Command, CommandStart, Filter, or_f
 from aiogram.types import (
     CallbackQuery,
@@ -36,8 +42,9 @@ logger = logging.getLogger(__name__)
 
 KEYWORDS = re.compile(r"^(sauce|source|what\?)$", re.IGNORECASE)
 INLINE_RESULT_ID = "url"
+LOADING_CALLBACK = "noop"
 LOADING_KEYBOARD = InlineKeyboardMarkup(
-    inline_keyboard=[[InlineKeyboardButton(text=texts.LOADING_BUTTON, callback_data="noop")]]
+    inline_keyboard=[[InlineKeyboardButton(text=texts.LOADING_BUTTON, callback_data=LOADING_CALLBACK)]]
 )
 SCENE_CALLBACK = "scene"
 SCENE_BUTTON = InlineKeyboardButton(text=texts.SCENE_BUTTON, callback_data=SCENE_CALLBACK)
@@ -60,10 +67,10 @@ def build_router(favourite_groups: list[int]) -> Router:
     router.message.register(send_help, Command("help"))
     router.message.register(on_new_members, F.new_chat_members)
     router.inline_query.register(on_inline_query)
-    router.chosen_inline_result.register(on_chosen_inline_result, F.result_id == INLINE_RESULT_ID)
+    router.callback_query.register(_answer_callback, F.data == LOADING_CALLBACK)
     router.include_router(apikey.build_router())
 
-    # Everything that starts a search; the flood check counts only these messages
+    # Everything that starts a search; the flood checks count only these updates
     search = Router(name="search")
     search.message.middleware(FloodMiddleware())
     search.message.register(on_trigger, F.text, or_f(Command("sauce", "source"), F.text.regexp(KEYWORDS)))
@@ -72,6 +79,8 @@ def build_router(favourite_groups: list[int]) -> Router:
         search.message.register(search_message, F.chat.id.in_(set(favourite_groups)), F.photo, HasMedia())
     search.callback_query.middleware(FloodMiddleware(SCENE_FLOOD_LIMIT, SCENE_FLOOD_WINDOW))
     search.callback_query.register(on_scene_button, F.data == SCENE_CALLBACK)
+    search.chosen_inline_result.middleware(FloodMiddleware())
+    search.chosen_inline_result.register(on_chosen_inline_result, F.result_id == INLINE_RESULT_ID)
     router.include_router(search)
     return router
 
@@ -247,23 +256,41 @@ def _without_links(keyboard: InlineKeyboardMarkup | None) -> InlineKeyboardMarku
 
 
 async def _edit(bot: Bot, answer: Answer, **target: Any) -> None:
-    """Edit the placeholder into the answer; if that fails, it stays on "Mikke is looking..." for good."""
+    """Edit the placeholder into the answer; if that fails, it stays on "Mikke is looking..." for good.
+
+    At most one retry of each: without the link buttons, after waiting out flood control,
+    and after a network or server error (an edit that went through then is "not modified").
+    """
     keyboard = answer.keyboard
-    for _attempt in range(2):
+    waited = failed = False
+    for _attempt in range(4):
         try:
             await bot.edit_message_text(text=answer.text, reply_markup=keyboard, **target)
             return
         except TelegramRetryAfter as e:
+            if waited:
+                logger.warning("Could not edit the answer, still rate limited: %s", e.message)
+                return
+            # any earlier, and the retry is refused too
             logger.warning("Editing the answer is rate limited, retrying in %s s", e.retry_after)
-            await asyncio.sleep(min(e.retry_after, 60))
+            await asyncio.sleep(e.retry_after)
+            waited = True
         except TelegramBadRequest as e:
             without_links = _without_links(keyboard)
-            if without_links == keyboard:
+            # "not modified" (a duplicated update: the answer is there already) or a message that is gone:
+            # the links are not to blame, and taking them off would only spoil a good answer
+            if without_links == keyboard or is_expected(e):
                 logger.warning("Could not edit the answer: %s", e.message)
                 return
             # most likely a link Telegram does not accept as a button: show the text without the links
             logger.warning("Could not edit the answer with link buttons (%s), retrying without", e.message)
             keyboard = without_links
+        except (TelegramNetworkError, TelegramServerError) as e:
+            if failed:
+                logger.warning("Could not edit the answer: %s", e)
+                return
+            logger.warning("Could not edit the answer (%s), retrying", e)
+            failed = True
         except TelegramAPIError as e:
             logger.warning("Could not edit the answer: %s", e)
             return

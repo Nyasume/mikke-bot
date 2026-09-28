@@ -1,6 +1,6 @@
 name: CI
 
-# Lint and tests on every push and PR; main also builds and pushes the image to GHCR.
+# Lint and tests on pushes to main and on every PR; main also builds and pushes the image to GHCR.
 # Deploy is manual, like the GitLab bots: Actions -> CI -> Run workflow on main.
 on:
   push:

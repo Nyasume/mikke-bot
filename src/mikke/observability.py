@@ -47,6 +47,15 @@ SECRET_PATTERNS = (
     re.compile(r"(api_key=)[^&\s\"']+"),
     re.compile(r"(/apikey(?:@\w+)?\s+)[^\s\"'<]+", re.IGNORECASE),
 )
+# The searched images, kept out of Sentry only (the logs and the owner reports keep them): a file_id
+# opens the user's picture through /img/, and an inline search's URL is whatever the user sent.
+# The first group stays, so the event still names the route or the search. `[Filtered]` matches
+# none of them again: breadcrumbs are scrubbed twice, on their own and in the event.
+MEDIA_PATTERNS = (
+    re.compile(r"(/img/(?:\d+/)?)[\w-]+(?![\w/-])"),
+    re.compile(r"(\burl=)[^&\s\"']+"),
+    re.compile(r"(\burl:)\S+"),
+)
 # Header values that never leave: the webhook secret, the trace.moe key, client IPs behind Cloudflare
 DENYLIST = [*DEFAULT_DENYLIST, "x-telegram-bot-api-secret-token", "x-trace-key"]
 PII_DENYLIST = [*DEFAULT_PII_DENYLIST, "cf-connecting-ip", "true-client-ip"]
@@ -93,7 +102,7 @@ async def tag_bot(
 
 
 class Scrubber:
-    """Replaces the secrets in every string of an event or a breadcrumb, dictionary keys included."""
+    """Replaces the secrets and searched images in every string of an event or a breadcrumb, dictionary keys too."""
 
     def __init__(self, secrets: list[str]) -> None:
         values = {secret for secret in secrets if secret}
@@ -105,7 +114,10 @@ class Scrubber:
     def text(self, value: str) -> str:
         for secret in self._secrets:
             value = value.replace(secret, FILTERED)
-        return redact(value)
+        value = redact(value)
+        for pattern in MEDIA_PATTERNS:
+            value = pattern.sub(rf"\g<1>{FILTERED}", value)
+        return value
 
     def __call__(self, value: Any) -> Any:
         if isinstance(value, str):

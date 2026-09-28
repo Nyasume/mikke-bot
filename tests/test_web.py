@@ -2,14 +2,26 @@ import asyncio
 
 import aiohttp
 import pytest
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.methods import GetFile, SendMessage
-from aiohttp import test_utils
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError, TelegramRetryAfter, TelegramServerError
+from aiogram.methods import EditMessageText, GetFile, SendMessage
+from aiohttp import test_utils, web
 
 from mikke import texts
+from mikke.bot import InFlight
 from mikke.config import derive_secret
-from mikke.web import build_app, webhooks
-from payloads import BOT_TOKEN, EXTRA_BOT_TOKEN, IMAGE, message, telegram_file_error, update
+from mikke.saucenao import SEARCH_URL
+from mikke.web import build_app, counted, webhooks
+from payloads import (
+    ANIME,
+    BOT_TOKEN,
+    EXTRA_BOT_TOKEN,
+    IMAGE,
+    PHOTO,
+    message,
+    sauce_response,
+    telegram_file_error,
+    update,
+)
 
 SECRET = "webhook-secret_1"
 EXTRA_SECRET = derive_secret(SECRET, 43)
@@ -71,6 +83,68 @@ async def test_webhook_accepts_the_right_secret(client, harness):
     assert response.status == 200
     await _wait_for(lambda: harness.session.calls(SendMessage))
     assert harness.session.calls(SendMessage)[0].text == texts.HELP
+
+
+async def test_webhooks_are_answered_before_their_update_is_handled(client, harness, monkeypatch, respx_mock):
+    # a search may wait a minute for its SauceNAO slot: Telegram must not wait for it
+    respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME]))
+    release = asyncio.Event()
+    get_file = harness.bot.get_file
+
+    async def slow_get_file(file_id):
+        await release.wait()
+        return await get_file(file_id)
+
+    monkeypatch.setattr(harness.bot, "get_file", slow_get_file)
+
+    response = await asyncio.wait_for(
+        client.post("/", json=update(message(photo=PHOTO)), headers={"X-Telegram-Bot-Api-Secret-Token": SECRET}), 1
+    )
+
+    assert response.status == 200
+    assert harness.session.calls(EditMessageText) == []
+    release.set()
+    await _wait_for(lambda: harness.session.calls(EditMessageText))
+
+
+async def test_webhooks_are_refused_once_shutdown_has_begun(client, harness):
+    harness.dp["in_flight"].closing = True
+
+    response = await client.post(
+        "/", json=update(message(text="/start")), headers={"X-Telegram-Bot-Api-Secret-Token": SECRET}
+    )
+
+    # Telegram keeps the update and sends it again later, to the next container
+    assert response.status == 503
+    await asyncio.sleep(0.05)
+    assert harness.session.requests == []
+    # everything else is still served
+    assert (await client.get("/healthz")).status == 200
+    assert (await client.get("/img/photo-file-id")).status == 200
+
+
+async def test_a_webhook_request_counts_until_its_updates_task_has_started():
+    in_flight = InFlight()
+    release = asyncio.Event()
+
+    async def search(event, data):
+        await release.wait()
+
+    async def handle(request):
+        # what aiogram does: answer Telegram at once and handle the update in a task of its own
+        asyncio.create_task(in_flight(search, object(), {}))
+        return web.Response()
+
+    await counted(handle, in_flight)(test_utils.make_mocked_request("POST", "/"))
+
+    # SIGTERM right now: the update's task has not started yet, and shutdown must still wait for it
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await in_flight.wait(0.05)
+    assert loop.time() - started >= 0.05
+
+    release.set()
+    await in_flight.wait(1)
 
 
 def test_webhook_paths_and_secrets(two_bots):
@@ -198,6 +272,23 @@ async def test_img_unknown_file_is_404(client, harness):
     harness.session.errors[GetFile] = TelegramBadRequest(method=GetFile(file_id="x"), message="wrong file_id")
     response = await client.get("/img/unknown-file-id")
     assert response.status == 404
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        TelegramNetworkError(method=GetFile(file_id="x"), message="HTTP Client says - Request timeout error"),
+        TelegramServerError(method=GetFile(file_id="x"), message="Internal Server Error"),
+        TelegramRetryAfter(method=GetFile(file_id="x"), message="Too Many Requests", retry_after=5),
+    ],
+    ids=["network", "server", "flood"],
+)
+async def test_img_is_502_while_telegram_cannot_answer_getfile(client, harness, error):
+    # the file may be fine: a 404 would tell the search engines it is gone
+    harness.session.errors[GetFile] = error
+    response = await client.get("/img/photo-file-id")
+    assert response.status == 502
+    assert harness.session.streamed == []
 
 
 async def test_img_serves_only_images(client, harness):

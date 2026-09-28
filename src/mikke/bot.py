@@ -30,13 +30,27 @@ class InFlight(BaseMiddleware):
     """Counts updates being handled, so shutdown can let running searches finish.
 
     Webhook updates are handled in background tasks that nothing waits for;
-    cut off mid-search, they would leave their placeholders spinning.
+    cut off mid-search, they would leave their placeholders spinning. A webhook
+    request counts too, until its update's task has started (`web.counted`),
+    and once shutdown has begun (`closing`) webhooks are refused, so the count
+    only goes down.
     """
 
     def __init__(self) -> None:
         self._count = 0
         self._idle = asyncio.Event()
         self._idle.set()
+        # set on SIGTERM: from then on the webhooks answer 503 and Telegram sends the updates again later
+        self.closing = False
+
+    def enter(self) -> None:
+        self._count += 1
+        self._idle.clear()
+
+    def leave(self) -> None:
+        self._count -= 1
+        if self._count == 0:
+            self._idle.set()
 
     async def __call__(
         self,
@@ -44,14 +58,11 @@ class InFlight(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        self._count += 1
-        self._idle.clear()
+        self.enter()
         try:
             return await handler(event, data)
         finally:
-            self._count -= 1
-            if self._count == 0:
-                self._idle.set()
+            self.leave()
 
     async def wait(self, grace: float) -> None:
         """Return once no update is being handled, or after `grace` seconds."""
@@ -65,7 +76,13 @@ def build_dispatcher(
     """One dispatcher for every bot: aiogram hands each handler the bot that received the update as `bot`."""
     dp = Dispatcher(searcher=searcher, scenes=scenes, reporter=reporter, keys=keys)
     dp["in_flight"] = in_flight = InFlight()
-    dp.update.outer_middleware(in_flight)
+    # outermost, around aiogram's own middlewares (the error handler runs in one): an update counts until
+    # its error has been reported too
+    builtin = list(dp.update.outer_middleware)
+    for middleware in builtin:
+        dp.update.outer_middleware.unregister(middleware)
+    for middleware in (in_flight, *builtin):
+        dp.update.outer_middleware(middleware)
     # the bot's username on Sentry events; aiogram runs the error handler outside the update middlewares
     dp.update.outer_middleware(tag_bot)
     dp.errors.outer_middleware(tag_bot)

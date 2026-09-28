@@ -13,7 +13,8 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     uv sync --locked --no-dev --no-install-project --no-editable
 
-COPY pyproject.toml uv.lock README.md ./
+# LICENSE and NOTICE go into the wheel's .dist-info/licenses: the image carries them (Apache-2.0)
+COPY pyproject.toml uv.lock README.md LICENSE NOTICE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable

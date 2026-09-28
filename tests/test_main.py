@@ -70,6 +70,14 @@ async def test_webhook_mode_registers_each_bots_webhook(make_harness, monkeypatc
         extra_bot_tokens=[EXTRA_BOT_TOKEN], bot_mode="webhook", webhook_secret="hook", web_host="127.0.0.1", web_port=0
     )
     _run_with_harness_bots(monkeypatch, harness)
+    built = []
+    build_dispatcher = mikke.__main__.build_dispatcher
+
+    def capture(*args):
+        built.append(dp := build_dispatcher(*args))
+        return dp
+
+    monkeypatch.setattr(mikke.__main__, "build_dispatcher", capture)
 
     await run(harness.settings)
 
@@ -80,6 +88,11 @@ async def test_webhook_mode_registers_each_bots_webhook(make_harness, monkeypatc
     assert extra_hook.allowed_updates == primary_hook.allowed_updates
     assert {"message", "callback_query", "inline_query", "chosen_inline_result"} <= set(primary_hook.allowed_updates)
     assert primary.calls(DeleteWebhook) == extra.calls(DeleteWebhook) == []
+    # updates refused during shutdown wait for the next start: nothing drops them
+    assert primary_hook.drop_pending_updates is extra_hook.drop_pending_updates is None
+    # and from SIGTERM on, webhooks are refused
+    [dp] = built
+    assert dp["in_flight"].closing is True
 
 
 async def test_polling_mode_polls_every_bot(make_harness, monkeypatch):

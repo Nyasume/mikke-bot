@@ -4,7 +4,7 @@ from urllib.parse import urlsplit
 
 from aiogram.types import Message
 
-IMAGE_EXTENSIONS = frozenset({"jpg", "jpeg", "png", "webp", "bmp"})
+IMAGE_EXTENSIONS = frozenset({"jpg", "jpeg", "png", "webp", "bmp", "gif"})
 
 MediaKind = Literal["photo", "sticker", "document", "video"]
 

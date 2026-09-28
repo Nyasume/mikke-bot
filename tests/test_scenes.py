@@ -1,9 +1,17 @@
+import asyncio
+
+import httpx
 import pytest
+from aiogram.methods import GetFile
 
 from mikke import texts
+from mikke.media import Media
 from mikke.reports import Hit
-from mikke.scenes import hit, render
-from payloads import SCENE
+from mikke.scenes import Alert, hit, render
+from mikke.tracemoe import SEARCH_URL
+from payloads import SCENE, trace_response
+
+PHOTO = Media("photo-file-id", "photo-unique", "photo", "photo-file-id")
 
 
 def _scene(**changes) -> dict:
@@ -115,3 +123,64 @@ def test_unknown_episode_is_left_out():
 def test_time_range(start, end, shown):
     text, _ = render(_scene(**{"from": start, "to": end}))
     assert f"\n<b>Time: </b>{shown}\n" in text
+
+
+# --- the same image, searched at the same time ---------------------------------
+
+
+async def test_concurrent_presses_on_the_same_image_ask_trace_moe_once(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).respond(json=trace_response([SCENE]))
+    harness.session.slow = True
+
+    first, second = await asyncio.gather(
+        harness.scenes.search(harness.bot, PHOTO),
+        harness.scenes.search(harness.bot, Media("another-id", "photo-unique", "photo", "another-id")),
+    )
+
+    assert route.call_count == 1
+    assert (first.outcome.cached, second.outcome.cached) == (False, True)
+    assert second.text == first.text
+
+
+async def test_a_press_that_waited_for_a_failed_search_runs_its_own(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).mock(
+        side_effect=[httpx.Response(500, text="boom"), httpx.Response(200, json=trace_response([SCENE]))]
+    )
+    harness.session.slow = True
+
+    failed, found = await asyncio.gather(
+        harness.scenes.search(harness.bot, PHOTO), harness.scenes.search(harness.bot, PHOTO)
+    )
+
+    assert isinstance(failed, Alert)
+    assert failed.outcome.status == "error"
+    assert (found.outcome.status, found.outcome.cached) == ("found", False)
+    assert route.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "scene", ["not a scene", {**SCENE, "anilist": {"id": 1, "title": "not a mapping"}}], ids=["string", "title"]
+)
+async def test_a_scene_that_cannot_be_shown_is_an_error_and_is_not_cached(respx_mock, harness, scene):
+    route = respx_mock.post(SEARCH_URL).respond(json=trace_response([scene]))
+
+    alert = await harness.scenes.search(harness.bot, PHOTO)
+    await harness.scenes.search(harness.bot, PHOTO)
+
+    assert isinstance(alert, Alert)
+    assert (alert.text, alert.outcome.status) == (texts.SCENE_ERROR, "error")
+    assert route.call_count == 2
+
+
+async def test_presses_in_line_for_trace_moe_download_nothing_once_the_quota_is_gone(respx_mock, harness):
+    respx_mock.post(SEARCH_URL).respond(402, json={"error": "Search quota depleted (quota per 24 hours: 100)"})
+    harness.session.slow = True
+
+    first, second = await asyncio.gather(
+        harness.scenes.search(harness.bot, PHOTO),
+        harness.scenes.search(harness.bot, Media("other-id", "other-unique", "photo", "other-id")),
+    )
+
+    assert first.outcome.status == second.outcome.status == "limit"
+    # the second file is fetched only once its search has trace.moe's turn, and by then there is no quota
+    assert [call.file_id for call in harness.session.calls(GetFile)] == ["photo-file-id"]

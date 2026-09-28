@@ -83,9 +83,11 @@ async def run(settings: Settings) -> None:
                         allowed_updates=dp.resolve_used_update_types(),
                     )
                 await _wait_for_stop_signal()
-                # stop taking updates, then let the ones in progress finish their edits
-                await site.stop()
+                # stop taking updates (Telegram sends the refused ones again, to the next container),
+                # then let the ones in progress finish their edits
                 in_flight: InFlight = dp["in_flight"]
+                in_flight.closing = True
+                await site.stop()
                 await in_flight.wait(SHUTDOWN_GRACE_SECONDS)
             else:
                 for bot in bots:

@@ -19,10 +19,19 @@ def tracemoe(http: httpx.AsyncClient, clock: Clock) -> TraceMoe:
     return TraceMoe(http, clock=clock)
 
 
+def _image(filename: str = "image.jpg"):
+    """An upload callable for `search`."""
+
+    async def upload() -> tuple[bytes, str]:
+        return IMAGE, filename
+
+    return upload
+
+
 async def test_uploads_image_bytes_with_anilist_info_and_cut_borders(respx_mock, tracemoe):
     route = respx_mock.post(SEARCH_URL).respond(json=trace_response([SCENE]))
 
-    assert await tracemoe.search(IMAGE, "file_1.jpg") == [SCENE]
+    assert await tracemoe.search(_image("file_1.jpg")) == [SCENE]
 
     request = route.calls.last.request
     # both are flags: trace.moe only checks that the parameter is there
@@ -35,7 +44,7 @@ async def test_uploads_image_bytes_with_anilist_info_and_cut_borders(respx_mock,
 async def test_api_key_goes_into_the_x_trace_key_header(respx_mock, http, clock):
     route = respx_mock.post(SEARCH_URL).respond(json=trace_response([]))
 
-    assert await TraceMoe(http, "sponsor-key", clock=clock).search(IMAGE) == []
+    assert await TraceMoe(http, "sponsor-key", clock=clock).search(_image()) == []
 
     request = route.calls.last.request
     assert request.headers["x-trace-key"] == "sponsor-key"
@@ -46,18 +55,18 @@ async def test_quota_depleted_blocks_without_calling_the_api(respx_mock, tracemo
     route = respx_mock.post(SEARCH_URL).respond(402, json=QUOTA_DEPLETED)
 
     with pytest.raises(QuotaExceededError):
-        await tracemoe.search(IMAGE)
+        await tracemoe.search(_image())
     assert tracemoe.exhausted
     with pytest.raises(QuotaExceededError):
         tracemoe.check_quota()
     with pytest.raises(QuotaExceededError):
-        await tracemoe.search(IMAGE)
+        await tracemoe.search(_image())
     assert route.call_count == 1
 
     clock.now += QUOTA_RETRY_SECONDS
     assert not tracemoe.exhausted
     respx_mock.post(SEARCH_URL).respond(json=trace_response([SCENE]))
-    assert await tracemoe.search(IMAGE) == [SCENE]
+    assert await tracemoe.search(_image()) == [SCENE]
 
 
 @pytest.mark.parametrize(
@@ -77,14 +86,14 @@ async def test_errors_raise_without_blocking(respx_mock, tracemoe, status, body,
         respx_mock.post(SEARCH_URL).respond(status, json=body)
 
     with pytest.raises(TraceMoeError, match=expected):
-        await tracemoe.search(IMAGE)
+        await tracemoe.search(_image())
     assert not tracemoe.exhausted
 
 
 async def test_non_json_answer_is_an_error(respx_mock, tracemoe):
     respx_mock.post(SEARCH_URL).respond(200, text="<html>")
     with pytest.raises(TraceMoeError, match="not JSON"):
-        await tracemoe.search(IMAGE)
+        await tracemoe.search(_image())
 
 
 async def test_one_search_at_a_time(respx_mock, tracemoe):
@@ -100,7 +109,7 @@ async def test_one_search_at_a_time(respx_mock, tracemoe):
 
     route = respx_mock.post(SEARCH_URL).mock(side_effect=slow)
 
-    results = await asyncio.gather(*(tracemoe.search(IMAGE) for _ in range(3)))
+    results = await asyncio.gather(*(tracemoe.search(_image()) for _ in range(3)))
 
     assert results == [[SCENE]] * 3
     assert route.call_count == 3
@@ -110,7 +119,7 @@ async def test_one_search_at_a_time(respx_mock, tracemoe):
 async def test_searches_waiting_in_line_stop_once_the_quota_runs_out(respx_mock, tracemoe):
     route = respx_mock.post(SEARCH_URL).respond(402, json=QUOTA_DEPLETED)
 
-    results = await asyncio.gather(*(tracemoe.search(IMAGE) for _ in range(3)), return_exceptions=True)
+    results = await asyncio.gather(*(tracemoe.search(_image()) for _ in range(3)), return_exceptions=True)
 
     assert all(isinstance(result, QuotaExceededError) for result in results)
     assert route.call_count == 1

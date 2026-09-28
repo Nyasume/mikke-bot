@@ -2,7 +2,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -13,6 +13,9 @@ SEARCH_URL = "https://api.trace.moe/search"
 # Guests get 100 searches per rolling 24 hours and one search at a time. Once the
 # quota is used up, stop calling the API and probe it again now and then.
 QUOTA_RETRY_SECONDS = 600.0
+
+# The image to upload and its file name, fetched only once the search has its turn
+Upload = Callable[[], Awaitable[tuple[bytes, str]]]
 
 
 class QuotaExceededError(Exception):
@@ -47,11 +50,16 @@ class TraceMoe:
         if self.exhausted:
             raise QuotaExceededError
 
-    async def search(self, image: bytes, filename: str = "image.jpg") -> list[dict]:
-        """Search by uploaded image bytes, best match first, with AniList titles and MAL ids."""
+    async def search(self, upload: Upload) -> list[dict]:
+        """Search by an uploaded image, best match first, with AniList titles and MAL ids.
+
+        `upload` runs once this search has its turn: searches waiting in line hold no image,
+        and fetch none once the quota has run out.
+        """
         async with self._lock:
             # the quota may have run out while this search was waiting for its turn
             self.check_quota()
+            image, filename = await upload()
             response = await self._client.post(
                 SEARCH_URL,
                 params={"anilistInfo": "", "cutBorders": ""},

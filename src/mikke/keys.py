@@ -38,7 +38,11 @@ class UserKey:
 class KeyStore:
     def __init__(self, path: Path) -> None:
         self._path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # the keys are as secret as the bot tokens: the owner's alone, also outside the image's /data.
+        # A directory made before is left as it is (DATA_DIR may be anything); the file is ours.
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.touch(mode=0o600, exist_ok=True)
+        path.chmod(0o600)
         self._execute(SCHEMA)
 
     async def get(self, user_id: int) -> UserKey | None:

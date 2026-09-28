@@ -1,5 +1,6 @@
 """Users' own SauceNAO keys: /apikey, a bare key in private, the buttons, and where they are used."""
 
+import asyncio
 import time
 
 import httpx
@@ -9,7 +10,7 @@ from aiogram.methods import AnswerCallbackQuery, DeleteMessage, EditMessageText,
 
 from mikke import texts
 from mikke.keys import UserKey
-from mikke.saucenao import PROBE_URL, SEARCH_URL
+from mikke.saucenao import PROBE_URL, SEARCH_URL, SauceNao
 from payloads import (
     ADMIN_ID,
     ANIME,
@@ -194,12 +195,48 @@ async def test_a_picture_is_searched_not_taken_for_a_key(harness, checked, respx
     assert await harness.keys.get(7) is None
 
 
-async def test_key_checks_are_flood_limited(harness, checked):
+@pytest.mark.parametrize("text", [USER_KEY, f"/apikey {USER_KEY}"], ids=["bare", "command"])
+async def test_key_checks_are_flood_limited(harness, checked, text):
     now = int(time.time())
     for _ in range(6):
-        await harness.feed(update(message(text=USER_KEY, date=now)))
+        await harness.feed(update(message(text=text, date=now)))
 
     assert checked.call_count == 5
+
+
+async def test_the_steps_and_the_removal_are_not_flood_limited(harness, checked):
+    await harness.keys.set(7, USER_KEY)
+    now = int(time.time())
+    for _ in range(5):
+        await harness.feed(update(message(text="/apikey", date=now)))
+
+    await harness.feed(update(message(text="/apikey remove", date=now)))
+
+    # neither is a SauceNAO search
+    assert await harness.keys.get(7) is None
+    assert checked.call_count == 0
+
+
+async def test_a_removal_sent_while_a_key_is_checked_comes_after_it(harness, checked, monkeypatch):
+    release = asyncio.Event()
+    account = SauceNao.account
+
+    async def slow_account(self):
+        await release.wait()
+        return await account(self)
+
+    monkeypatch.setattr(SauceNao, "account", slow_account)
+    adding = asyncio.create_task(harness.feed(update(message(text=USER_KEY))))
+    await asyncio.sleep(0)
+    removing = asyncio.create_task(harness.feed(update(message(text="/apikey remove"))))
+    await asyncio.wait({removing}, timeout=0.1)
+
+    release.set()
+    await asyncio.gather(adding, removing)
+
+    # in the order the user sent them: saved, then forgotten
+    assert await harness.keys.get(7) is None
+    assert [reply.text for reply in _replies(harness)][-1] == texts.KEY_REMOVED
 
 
 # --- removing it -------------------------------------------------------------
@@ -255,6 +292,19 @@ async def test_a_key_in_a_group_that_cannot_be_deleted(harness, checked):
     [warning] = _replies(harness, GROUP["id"])
     assert warning.text.startswith("Psst, <a")
     assert "please delete it yourself" in warning.text
+
+
+async def test_a_key_in_a_group_is_deleted_however_many_checks_came_before(harness, checked):
+    now = int(time.time())
+    for _ in range(5):
+        await harness.feed(update(message(text=USER_KEY, date=now)))
+
+    await harness.feed(update(message(GROUP, text=f"/apikey {USER_KEY}", date=now)))
+
+    # only the checks are limited: a key left in a group for everyone to see is not
+    assert checked.call_count == 5
+    [delete] = harness.session.calls(DeleteMessage)
+    assert delete.chat_id == GROUP["id"]
 
 
 def test_channel_posts_are_not_asked_for(harness):

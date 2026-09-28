@@ -1,5 +1,6 @@
 """Offline test harness: a fake Telegram session; SauceNAO and trace.moe are mocked with respx in the tests."""
 
+import asyncio
 import itertools
 from collections.abc import AsyncGenerator
 from dataclasses import dataclass
@@ -41,6 +42,8 @@ class FakeSession(BaseSession):
         self.chat_errors: dict[int, Exception] = {}
         self.content = IMAGE
         self.streamed: list[str] = []
+        # every call lets other tasks run first, like a real request, so concurrent searches interleave
+        self.slow = False
         # every send_* call and the message it returned
         self.sent: list[tuple[TelegramMethod, Message]] = []
         self._ids = itertools.count(1000)
@@ -52,6 +55,8 @@ class FakeSession(BaseSession):
         if isinstance(method, GetMe):
             return User(id=bot.id, is_bot=True, first_name="Mikke", username=USERNAMES[bot.id])
         self.requests.append(method)
+        if self.slow:
+            await asyncio.sleep(0)
         if (error := self.errors.get(type(method)) or self.fail_once.pop(type(method), None)) is not None:
             raise error
         if (error := self.chat_errors.get(getattr(method, "chat_id", None))) is not None:

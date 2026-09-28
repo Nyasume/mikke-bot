@@ -13,7 +13,7 @@ import re
 from aiogram import Bot, F, Router
 from aiogram.enums import ChatType
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, invert_f
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 
 from mikke import texts
@@ -22,7 +22,7 @@ from mikke.keys import KeyStore, UserKey
 from mikke.observability import redact
 from mikke.reports import Reporter
 from mikke.saucenao import Account, InvalidKeyError, QuotaExceededError
-from mikke.search import ADD_KEY_CALLBACK, Searcher
+from mikke.search import ADD_KEY_CALLBACK, KeyLocks, Searcher
 
 logger = logging.getLogger(__name__)
 
@@ -36,26 +36,42 @@ REMOVE_KEY_CALLBACK = "key:remove"
 CHECK_FLOOD_LIMIT = 5
 CHECK_FLOOD_WINDOW = 60
 
+# One key change at a time per user: a check takes a while, and what the user sent later must land later
+CHANGES = KeyLocks()
+
 API_PAGE_ROW = [InlineKeyboardButton(text=texts.API_PAGE_BUTTON, url=texts.API_PAGE)]
 REMOVE_KEY_ROW = [InlineKeyboardButton(text=texts.REMOVE_KEY_BUTTON, callback_data=REMOVE_KEY_CALLBACK)]
 
 
 def build_router() -> Router:
     router = Router(name="apikey")
-    router.message.middleware(FloodMiddleware(CHECK_FLOOD_LIMIT, CHECK_FLOOD_WINDOW))
     private = F.chat.type == ChatType.PRIVATE
-    router.message.register(on_apikey, Command("apikey"), private)
-    router.message.register(on_bare_key, private, F.text.regexp(BARE_KEY, mode="fullmatch"))
-    router.message.register(on_apikey_in_chat, Command("apikey"))
+    # never flood limited: a key left in a group is there for everyone to see
+    router.message.register(on_apikey_in_chat, Command("apikey"), ~private)
+    # the steps, the removal and a malformed key cost no SauceNAO search: never flood limited either
+    router.message.register(on_apikey, Command("apikey"), private, invert_f(_key_to_check))
     router.callback_query.register(on_add_key, F.data == ADD_KEY_CALLBACK)
     router.callback_query.register(on_remove_key, F.data == REMOVE_KEY_CALLBACK)
+
+    # Where a key gets checked: every check is a real SauceNAO search
+    checks = Router(name="apikey-checks")
+    checks.message.middleware(FloodMiddleware(CHECK_FLOOD_LIMIT, CHECK_FLOOD_WINDOW))
+    checks.message.register(on_apikey_key, Command("apikey"), private, _key_to_check)
+    checks.message.register(on_bare_key, private, F.text.regexp(BARE_KEY, mode="fullmatch"))
+    router.include_router(checks)
     return router
 
 
-async def on_apikey(
-    message: Message, command: CommandObject, *, bot: Bot, searcher: Searcher, keys: KeyStore, reporter: Reporter
-) -> None:
-    """/apikey in private: the steps and the saved key, `/apikey <key>` or `/apikey remove`."""
+def _key_to_check(message: Message, command: CommandObject) -> dict[str, str] | bool:
+    """Passes `/apikey <key>`, the form that costs a SauceNAO search, and hands the key over as `api_key`."""
+    argument = (command.args or "").strip()
+    if KEY_ARGUMENT.fullmatch(argument) and argument.lower() not in REMOVE_WORDS:
+        return {"api_key": argument}
+    return False
+
+
+async def on_apikey(message: Message, command: CommandObject, *, bot: Bot, keys: KeyStore, reporter: Reporter) -> None:
+    """/apikey in private without a key to check: the steps and the saved key, `/apikey remove`, or a malformed key."""
     user = message.from_user
     if user is None:
         return
@@ -64,10 +80,16 @@ async def on_apikey(
         await _send_steps(bot, user.id, keys)
     elif argument.lower() in REMOVE_WORDS:
         await _remove(bot, user, keys, reporter)
-    elif KEY_ARGUMENT.fullmatch(argument):
-        await _add(bot, user, argument, searcher=searcher, keys=keys, reporter=reporter)
     else:
         await bot.send_message(user.id, texts.KEY_MALFORMED, reply_markup=_markup(API_PAGE_ROW))
+
+
+async def on_apikey_key(
+    message: Message, api_key: str, *, bot: Bot, searcher: Searcher, keys: KeyStore, reporter: Reporter
+) -> None:
+    """`/apikey <key>` in private."""
+    if message.from_user is not None:
+        await _add(bot, message.from_user, api_key, searcher=searcher, keys=keys, reporter=reporter)
 
 
 async def on_bare_key(message: Message, bot: Bot, searcher: Searcher, keys: KeyStore, reporter: Reporter) -> None:
@@ -121,6 +143,13 @@ async def _send_steps(bot: Bot, user_id: int, keys: KeyStore) -> None:
 
 async def _add(bot: Bot, user: User, api_key: str, *, searcher: Searcher, keys: KeyStore, reporter: Reporter) -> None:
     """Check the key with SauceNAO, then save it and tell the user what it gives them."""
+    async with CHANGES.hold(str(user.id)):
+        await _check_and_save(bot, user, api_key, searcher=searcher, keys=keys, reporter=reporter)
+
+
+async def _check_and_save(
+    bot: Bot, user: User, api_key: str, *, searcher: Searcher, keys: KeyStore, reporter: Reporter
+) -> None:
     account: Account | None = None
     try:
         account = await searcher.saucenao(api_key).account()
@@ -144,11 +173,12 @@ async def _add(bot: Bot, user: User, api_key: str, *, searcher: Searcher, keys: 
 
 
 async def _remove(bot: Bot, user: User, keys: KeyStore, reporter: Reporter) -> None:
-    if await keys.remove(user.id):
-        await bot.send_message(user.id, texts.KEY_REMOVED)
-        await reporter.key(bot, user, "removed")
-    else:
-        await bot.send_message(user.id, texts.KEY_NOTHING_TO_REMOVE)
+    async with CHANGES.hold(str(user.id)):
+        if await keys.remove(user.id):
+            await bot.send_message(user.id, texts.KEY_REMOVED)
+            await reporter.key(bot, user, "removed")
+        else:
+            await bot.send_message(user.id, texts.KEY_NOTHING_TO_REMOVE)
 
 
 def _saved(key: UserKey, account: Account | None) -> str:
