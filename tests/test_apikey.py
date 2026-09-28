@@ -36,7 +36,6 @@ ACCOUNT = {
     "account_type": "1",
     "user_id": "12345",
 }
-CHANNEL = {"id": -1005550001, "type": "channel", "title": "Art Channel"}
 
 
 @pytest.fixture
@@ -228,7 +227,7 @@ async def test_the_remove_button(harness):
     assert len(harness.session.calls(AnswerCallbackQuery)) == 1
 
 
-# --- a key in a group or a channel -------------------------------------------
+# --- a key in a group -------------------------------------------
 
 
 async def test_a_key_in_a_group_is_deleted_and_never_saved(harness, checked):
@@ -258,15 +257,9 @@ async def test_a_key_in_a_group_that_cannot_be_deleted(harness, checked):
     assert "please delete it yourself" in warning.text
 
 
-async def test_a_key_in_a_channel_is_deleted_and_never_saved(harness, checked):
-    post = {"message_id": 5, "date": int(time.time()), "chat": CHANNEL, "sender_chat": CHANNEL}
-    await harness.feed({"update_id": 950, "channel_post": {**post, "text": f"/apikey {USER_KEY}"}})
-
-    assert checked.call_count == 0
-    [delete] = harness.session.calls(DeleteMessage)
-    assert delete.chat_id == CHANNEL["id"]
-    [warning] = _replies(harness, CHANNEL["id"])
-    assert warning.text == texts.KEY_IN_CHAT_DELETED.format("")
+def test_channel_posts_are_not_asked_for(harness):
+    # /apikey is not handled in channels: that would bring every post of every channel the bot is in
+    assert "channel_post" not in harness.dp.resolve_used_update_types()
 
 
 @pytest.mark.parametrize("text", ["/apikey", "/apikey remove"])

@@ -1,8 +1,8 @@
 """Users' own SauceNAO keys: /apikey, a bare key sent in private, and the buttons that lead there.
 
 A key is checked with one real SauceNAO search before it is saved. It never
-goes to the logs or the owner reports, and in a group or a channel it is never
-saved: Mikke deletes the message if she may.
+goes to the logs or the owner reports, and in a group it is never saved:
+Mikke deletes the message if she may.
 """
 
 import contextlib
@@ -47,7 +47,6 @@ def build_router() -> Router:
     router.message.register(on_apikey, Command("apikey"), private)
     router.message.register(on_bare_key, private, F.text.regexp(BARE_KEY, mode="fullmatch"))
     router.message.register(on_apikey_in_chat, Command("apikey"))
-    router.channel_post.register(on_apikey_in_chat, Command("apikey"))
     router.callback_query.register(on_add_key, F.data == ADD_KEY_CALLBACK)
     router.callback_query.register(on_remove_key, F.data == REMOVE_KEY_CALLBACK)
     return router
@@ -78,7 +77,10 @@ async def on_bare_key(message: Message, bot: Bot, searcher: Searcher, keys: KeyS
 
 
 async def on_apikey_in_chat(message: Message, command: CommandObject, bot: Bot) -> None:
-    """/apikey in a group or a channel: keys only go to Mikke in private."""
+    """/apikey in a group: keys only go to Mikke in private.
+
+    Channels are left out: that would need channel_post updates, every post of every channel the bot is in.
+    """
     argument = (command.args or "").strip()
     if not argument or argument.lower() in REMOVE_WORDS:
         await message.reply(texts.KEY_PRIVATE_ONLY.format((await bot.me()).username))

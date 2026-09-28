@@ -22,7 +22,7 @@ Anyone can bring their own free SauceNAO key, so their searches use their own li
 - Sending the key itself, or `/apikey <key>`, checks it with one real SauceNAO search, saves it and shows the account's limits. A key SauceNAO does not know is not saved.
 - Their searches in private, with `/sauce` in groups and inline then use their key. When it is used up for the day, or SauceNAO stops accepting it, Mikke's shared key stands in; a rejected key is mentioned to them once. Photos searched automatically in favourite groups always use the shared key.
 - `/apikey remove` or the 🗑 button forgets the key. Mikke only ever shows its last four characters.
-- A key sent with `/apikey` in a group or a channel is never saved; Mikke deletes the message if she may and suggests generating a new key.
+- A key sent with `/apikey` in a group is never saved; Mikke deletes the message if she may and suggests generating a new key.
 
 Keys are kept in SQLite (`mikke.sqlite3` in `DATA_DIR`, a Docker volume in production), shared by both bots, and never logged, reported or sent to Sentry.
 

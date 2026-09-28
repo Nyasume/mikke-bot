@@ -82,7 +82,7 @@ KEY_BUSY = "Mikke is checking this key too often right now. Please try again in 
 KEY_CHECK_FAILED = "Mikke couldn't reach SauceNAO to check your key. Please try again in a bit!"
 KEY_REMOVED = "Done! Mikke forgot your key, and your searches use hers again."
 KEY_NOTHING_TO_REMOVE = "You don't have a key saved, so there's nothing to remove."
-# /apikey in a group or a channel
+# /apikey in a group
 KEY_PRIVATE_ONLY = "Your own SauceNAO key goes to Mikke in a private chat: open @{} and send /apikey there."
 KEY_IN_CHAT_DELETED = (
     "Psst{}! API keys go to Mikke in a private chat, never in a group. She deleted your message and didn't save "
