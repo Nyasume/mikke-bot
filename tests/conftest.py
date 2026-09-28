@@ -141,7 +141,7 @@ def make_harness(http: httpx.AsyncClient):
         settings = make_settings(**overrides)
         bots = [build_bot(token, session=FakeSession()) for token in settings.bot_tokens()]
         clock = Clock()
-        saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value(), clock=clock)
+        saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value(), clock=clock, sleep=clock.sleep)
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
         cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
         searcher = Searcher(saucenao, settings.public_url, cache=cache)

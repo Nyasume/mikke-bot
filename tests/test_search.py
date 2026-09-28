@@ -80,8 +80,8 @@ async def test_no_result_is_cached_and_offers_fallback_links(respx_mock, harness
     assert route.call_count == 1
 
 
-async def test_exhausted_quota_answers_at_once_without_download_or_api(respx_mock, harness):
-    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([], short_remaining=0))
+async def test_daily_quota_used_up_answers_at_once_without_download_or_api(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([], long_remaining=0))
     await harness.searcher.search_file(harness.bot, Media("first-id", "first-u", "photo", "first-id"))
     requests_before = len(harness.session.requests)
 
@@ -92,6 +92,25 @@ async def test_exhausted_quota_answers_at_once_without_download_or_api(respx_moc
     assert answer.keyboard.inline_keyboard[0][0].text == "Google Lens"
     assert route.call_count == 1
     assert len(harness.session.requests) == requests_before  # not even getFile
+
+
+async def test_a_full_30_second_window_waits_and_downloads_only_then(respx_mock, harness, monkeypatch):
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME], short_remaining=0))
+    await harness.searcher.search_file(harness.bot, Media("first-id", "first-u", "photo", "first-id"))
+    downloaded_at = []
+    get_file = harness.bot.get_file
+
+    async def timed_get_file(file_id):
+        downloaded_at.append(harness.clock.now)
+        return await get_file(file_id)
+
+    monkeypatch.setattr(harness.bot, "get_file", timed_get_file)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO)
+
+    assert answer.text.startswith("<b>One Piece")
+    assert route.call_count == 2
+    assert downloaded_at == [1_000.0 + 30]
 
 
 async def test_cached_results_are_served_while_quota_is_exhausted(respx_mock, harness):

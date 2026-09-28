@@ -109,7 +109,7 @@ async def test_results_found_by_one_bot_are_cached_for_the_other(harness, found)
 
 
 async def test_the_saucenao_limit_is_shared(harness, respx_mock):
-    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME], short_remaining=0))
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME], long_remaining=0))
     await harness.feed(update(message(photo=PHOTO)))
 
     other_picture = [{**size, "file_unique_id": "other-u"} for size in EXTRA_PHOTO]
@@ -117,8 +117,22 @@ async def test_the_saucenao_limit_is_shared(harness, respx_mock):
 
     assert route.call_count == 1
     [edit] = harness.sessions[1].calls(EditMessageText)
-    assert edit.text == texts.LIMIT_REACHED
+    assert edit.text.startswith(texts.LIMIT_REACHED)
     assert harness.sessions[1].calls(GetFile) == []
+
+
+async def test_the_30_second_line_is_shared(harness, respx_mock):
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME], short_remaining=0))
+    await harness.feed(update(message(photo=PHOTO)))
+
+    other_picture = [{**size, "file_unique_id": "other-u"} for size in EXTRA_PHOTO]
+    await harness.feed(update(message(photo=other_picture)), harness.bots[1])
+
+    # the other bot's search waited for the window the first one used up
+    assert route.call_count == 2
+    assert harness.clock.now == 1_000.0 + 30
+    [edit] = harness.sessions[1].calls(EditMessageText)
+    assert edit.text.startswith("<b>One Piece")
 
 
 async def test_the_scene_button_is_answered_by_the_bot_that_received_the_press(harness, respx_mock):

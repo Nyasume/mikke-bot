@@ -1,5 +1,6 @@
 """Test data: constants, SauceNAO and trace.moe payloads, Telegram update builders (plain dicts)."""
 
+import asyncio
 import itertools
 import time
 from typing import Any
@@ -27,6 +28,11 @@ class Clock:
     def __call__(self) -> float:
         return self.now
 
+    async def sleep(self, seconds: float) -> None:
+        """asyncio.sleep in fake time: whatever is ready runs first, then the clock jumps ahead."""
+        await asyncio.sleep(0)
+        self.now += seconds
+
 
 # --- SauceNAO payloads -------------------------------------------------------
 
@@ -43,6 +49,11 @@ def sauce_response(results: list[dict], *, short_remaining: int = 3, long_remain
         },
         "results": results,
     }
+
+
+# What SauceNAO answered to a made-up key on 2026-09-28, with HTTP 403
+UNKNOWN_KEY = {"header": {"status": -1, "message": "The anonymous account type does not permit API usage."}}
+DAILY_LIMIT = {"header": {"status": -2, "message": "Daily Search Limit Exceeded."}}
 
 
 def result(similarity: float, **data: Any) -> dict:

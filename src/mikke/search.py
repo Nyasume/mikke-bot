@@ -78,10 +78,8 @@ class Searcher:
 
     async def search_file(self, bot: Bot, media: Media) -> Answer:
         async def query() -> list[dict]:
-            # no point in downloading the file while the API is off limits
-            self._saucenao.check_quota()
-            image, filename = await download(bot, media)
-            return await self._saucenao.search(image=image, filename=filename)
+            # SauceNao downloads the file only once the search has its slot
+            return await self._saucenao.search(upload=lambda: download(bot, media))
 
         return await self._search(media.file_unique_id, self.image_url(bot, media.file_id), query)
 
