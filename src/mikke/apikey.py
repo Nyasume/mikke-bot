@@ -21,7 +21,7 @@ from mikke.flood import FloodMiddleware
 from mikke.keys import KeyStore, UserKey
 from mikke.observability import redact
 from mikke.reports import Reporter
-from mikke.saucenao import Account, InvalidKeyError, QuotaExceededError
+from mikke.saucenao import Account, InvalidKeyError, QuotaExceededError, UnavailableError
 from mikke.search import ADD_KEY_CALLBACK, KeyLocks, Searcher
 
 logger = logging.getLogger(__name__)
@@ -163,8 +163,9 @@ async def _check_and_save(
             return
         # SauceNAO knows the key, it is just used up for today
     except Exception as e:
-        # an error text may quote the request URL, and with it the key
-        logger.error("Checking a SauceNAO key failed: %s", redact(f"{type(e).__name__}: {e}".replace(api_key, "[key]")))
+        # an error text may quote the request URL, and with it the key; SauceNAO being down is not our bug
+        log = logger.warning if isinstance(e, UnavailableError) else logger.error
+        log("Checking a SauceNAO key failed: %s", redact(f"{type(e).__name__}: {e}".replace(api_key, "[key]")))
         await bot.send_message(user.id, texts.KEY_CHECK_FAILED)
         return
     await keys.set(user.id, api_key)

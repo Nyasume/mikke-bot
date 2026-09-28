@@ -23,6 +23,7 @@ from payloads import (
     BASIC_GROUP,
     BOT_TOKEN,
     BOT_USERNAME,
+    CLOUDFLARE_DOWN,
     PHOTO,
     PRIVATE,
     PRIVATE_SUPERGROUP,
@@ -138,12 +139,26 @@ async def test_quota_used_up(harness, respx_mock):
 
 
 async def test_error_is_in_the_activity_report_alone(harness, respx_mock):
-    respx_mock.post(SEARCH_URL).respond(500, text="boom")
+    respx_mock.post(SEARCH_URL).respond(400, text="boom")
 
     await harness.feed(update(message(photo=PHOTO)))
 
     html = _report(harness)
-    assert "<h3>⚠ SauceNAO: error</h3><blockquote><p><code>SauceNaoError: HTTP 500" in html
+    assert "<h3>⚠ SauceNAO: error</h3><blockquote><p><code>SauceNaoError: HTTP 400</code>" in html
+    assert _admin_messages(harness) == []
+
+
+async def test_saucenao_down_is_reported_in_short(harness, respx_mock):
+    respx_mock.post(SEARCH_URL).respond(521, html=CLOUDFLARE_DOWN)
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    html = _report(harness)
+    assert (
+        "<h3>⚠ SauceNAO: error</h3><blockquote><p>"
+        "<code>UnavailableError: HTTP 521 (Cloudflare: web server is down)</code></p></blockquote>"
+    ) in html
+    assert "DOCTYPE" not in html
     assert _admin_messages(harness) == []
 
 
@@ -438,15 +453,15 @@ async def test_a_broken_report_is_logged_and_the_update_does_not_fail(harness, f
 
 async def test_without_activity_reports_a_failed_search_is_an_error_report(make_harness, respx_mock):
     harness = make_harness(report_results=False)
-    respx_mock.post(SEARCH_URL).respond(500, text="boom")
+    respx_mock.post(SEARCH_URL).respond(400, text="boom")
 
     await harness.feed(update(message(photo=PHOTO)))
 
     assert _reports(harness) == []
     [report] = _admin_messages(harness)
-    assert report.text.startswith(
+    assert report.text == (
         "⚠ <b>Error</b>\n<code>SauceNAO search failed for https://example.org/mikke/img/42/photo-large-id\n"
-        "SauceNaoError: HTTP 500"
+        "SauceNaoError: HTTP 400</code>"
     )
 
 

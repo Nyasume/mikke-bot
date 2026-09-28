@@ -9,7 +9,7 @@ from mikke.media import Media
 from mikke.reports import Hit, Quota
 from mikke.scenes import Alert, SceneSearcher, hit, render
 from mikke.tracemoe import SEARCH_URL, TraceMoe
-from payloads import SCENE, trace_response
+from payloads import CLOUDFLARE_DOWN, SCENE, trace_response
 
 PHOTO = Media("photo-file-id", "photo-unique", "photo", "photo-file-id")
 
@@ -144,7 +144,7 @@ async def test_concurrent_presses_on_the_same_image_ask_trace_moe_once(respx_moc
 
 async def test_a_press_that_waited_for_a_failed_search_runs_its_own(respx_mock, harness):
     route = respx_mock.post(SEARCH_URL).mock(
-        side_effect=[httpx.Response(500, text="boom"), httpx.Response(200, json=trace_response([SCENE]))]
+        side_effect=[httpx.Response(400, text="boom"), httpx.Response(200, json=trace_response([SCENE]))]
     )
     harness.session.slow = True
 
@@ -170,6 +170,23 @@ async def test_a_scene_that_cannot_be_shown_is_an_error_and_is_not_cached(respx_
     assert isinstance(alert, Alert)
     assert (alert.text, alert.outcome.status) == (texts.SCENE_ERROR, "error")
     assert route.call_count == 2
+
+
+async def test_trace_moe_down_is_an_alert_and_no_error_log(respx_mock, harness, caplog):
+    route = respx_mock.post(SEARCH_URL).respond(521, html=CLOUDFLARE_DOWN)
+
+    alert = await harness.scenes.search(harness.bot, PHOTO)
+
+    assert isinstance(alert, Alert)
+    assert alert.text == texts.SCENE_ERROR
+    assert alert.outcome.status == "error"
+    assert alert.outcome.error == "UnavailableError: HTTP 521 (Cloudflare: web server is down)"
+    assert route.call_count == 2
+    # trace.moe's outage, not our bug: no error for Sentry
+    assert {record.levelname for record in caplog.records if record.name.startswith("mikke")} == {"WARNING"}
+    # an outage is not cached
+    respx_mock.post(SEARCH_URL).respond(json=trace_response([SCENE]))
+    assert (await harness.scenes.search(harness.bot, PHOTO)).outcome.status == "found"
 
 
 async def test_presses_in_line_for_trace_moe_download_nothing_once_the_quota_is_gone(respx_mock, harness):

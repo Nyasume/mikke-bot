@@ -9,6 +9,8 @@ from typing import Any
 
 import httpx
 
+from mikke import outages
+
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://saucenao.com/search.php"
@@ -48,6 +50,10 @@ class InvalidKeyError(Exception):
 
 class SauceNaoError(Exception):
     """SauceNAO answered with an error."""
+
+
+class UnavailableError(SauceNaoError):
+    """SauceNAO did not answer, also on the retry: down, overloaded or out of reach. Not our bug."""
 
 
 @dataclass(frozen=True)
@@ -159,13 +165,7 @@ class SauceNao:
                 # the slot counts from the actual send, or not at all if the download failed
                 with contextlib.suppress(ValueError):
                     self._sent.remove(reserved)
-            self._sent.append(self._clock())
-            params = {"output_type": 2, "api_key": self._api_key, "db": 999, "numres": 5, "testmode": 1}
-            if image is not None:
-                content, filename = image
-                response = await self._client.post(SEARCH_URL, params=params, files={"file": (filename, content)})
-            else:
-                response = await self._client.get(SEARCH_URL, params={**params, "url": url})
+            response = await self._send(image, url, deadline)
 
             data = _json(response)
             if response.status_code == 429:
@@ -180,11 +180,49 @@ class SauceNao:
                 self._rejected_until = self._clock() + LONG_WINDOW_RETRY_SECONDS
                 raise InvalidKeyError
             if response.is_error:
-                raise SauceNaoError(self._hide(f"HTTP {response.status_code}: {response.text[:300]}"))
+                raise SauceNaoError(self._describe(response, data))
             if data is None:
-                raise SauceNaoError(self._hide(f"not JSON: {response.text[:300]}"))
+                raise SauceNaoError(f"{outages.status(response)}: not JSON")
             self._track(data.get("header") or {})
             return data
+
+    async def _send(self, image: tuple[bytes, str] | None, url: str | None, deadline: float) -> httpx.Response:
+        """Send the search in the slot just taken; SauceNAO down (a 5xx) or out of reach is `UnavailableError`.
+
+        Such a failure gets one retry, if it can go out before the deadline. The retry takes the
+        failed request's slot: a request that never reached SauceNAO cost nothing there.
+        """
+        params = {"output_type": 2, "api_key": self._api_key, "db": 999, "numres": 5, "testmode": 1}
+        retried = False
+        while True:
+            sent = self._clock()
+            self._sent.append(sent)
+            try:
+                if image is not None:
+                    content, filename = image
+                    response = await self._client.post(SEARCH_URL, params=params, files={"file": (filename, content)})
+                else:
+                    response = await self._client.get(SEARCH_URL, params={**params, "url": url})
+            except outages.UNREACHABLE as e:
+                failure = self._hide(outages.describe(e))
+            else:
+                if not outages.is_down(response):
+                    return response
+                failure = self._describe(response, _json(response))
+            if retried or self._clock() + outages.RETRY_SECONDS > deadline:
+                raise UnavailableError(failure)
+            logger.warning("SauceNAO did not answer (%s), retrying in %.0f s", failure, outages.RETRY_SECONDS)
+            await self._sleep(outages.RETRY_SECONDS)
+            # the key may have run out or been rejected meanwhile
+            self._check()
+            with contextlib.suppress(ValueError):
+                self._sent.remove(sent)
+            retried = True
+
+    def _describe(self, response: httpx.Response, data: dict | None) -> str:
+        """The status, with SauceNAO's own message if it sent one; never the page itself."""
+        message = ((data or {}).get("header") or {}).get("message")
+        return self._hide(f"{outages.status(response)}: {message}") if message else outages.status(response)
 
     async def _reserve(self, deadline: float) -> float:
         """Wait in line for a free slot in the 30-second window and take it; return its time."""

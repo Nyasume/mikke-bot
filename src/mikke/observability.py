@@ -60,6 +60,14 @@ MEDIA_PATTERNS = (
 DENYLIST = [*DEFAULT_DENYLIST, "x-telegram-bot-api-secret-token", "x-trace-key"]
 PII_DENYLIST = [*DEFAULT_PII_DENYLIST, "cf-connecting-ip", "true-client-ip"]
 
+# A used up quota, SauceNAO or trace.moe down, a user who blocked the bot
+EXPECTED_ERRORS = (
+    saucenao.QuotaExceededError,
+    tracemoe.QuotaExceededError,
+    saucenao.UnavailableError,
+    tracemoe.UnavailableError,
+    TelegramForbiddenError,
+)
 # Telegram refusing because a user was faster than the bot: an edit that changes
 # nothing, a message deleted before the answer, a button pressed long ago, a chat
 # that took away the bot's right to write
@@ -82,7 +90,7 @@ def redact(text: str) -> str:
 
 def is_expected(error: BaseException) -> bool:
     """Part of normal operation, not a bug: a used up quota, a user who blocked the bot or deleted a message."""
-    if isinstance(error, saucenao.QuotaExceededError | tracemoe.QuotaExceededError | TelegramForbiddenError):
+    if isinstance(error, EXPECTED_ERRORS):
         return True
     return isinstance(error, TelegramBadRequest) and any(
         text in error.message.lower() for text in EXPECTED_BAD_REQUESTS

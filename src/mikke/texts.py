@@ -20,6 +20,8 @@ NO_RESULT = "Mikke looked everywhere, but couldn't find it. <i>Maybe another sea
 LIMIT_REACHED = "Mikke has searched so much she needs a little break. Please try again in a bit!"
 INVALID_FILE = "<i>Mikke can't open this file.</i>"
 ERROR = "<b>Oops!</b> Something went wrong while Mikke was looking. Please try again in a bit..."
+# SauceNAO down or out of reach, also on the retry
+SAUCENAO_DOWN = "SauceNAO isn't answering Mikke right now. <i>Try one of the other search engines, or ask her again in a minute!</i>"
 NO_TITLE = "-no title-"
 
 INLINE_TITLE = "Tap and Mikke will find where this picture comes from"

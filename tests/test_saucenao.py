@@ -3,6 +3,7 @@ import asyncio
 import httpx
 import pytest
 
+from mikke.outages import RETRY_SECONDS
 from mikke.saucenao import (
     LONG_WINDOW_RETRY_SECONDS,
     MAX_WAIT_SECONDS,
@@ -14,8 +15,9 @@ from mikke.saucenao import (
     QuotaExceededError,
     SauceNao,
     SauceNaoError,
+    UnavailableError,
 )
-from payloads import ANIME, API_KEY, DAILY_LIMIT, IMAGE, UNKNOWN_KEY, Clock, sauce_response
+from payloads import ANIME, API_KEY, CLOUDFLARE_DOWN, DAILY_LIMIT, IMAGE, UNKNOWN_KEY, Clock, sauce_response
 
 START = 1_000.0
 
@@ -275,10 +277,15 @@ async def test_an_unknown_key_is_rejected_and_rests(respx_mock, saucenao, upload
 
 
 async def test_cloudflares_403_page_is_an_error_not_a_rejected_key(respx_mock, saucenao, uploads):
-    respx_mock.post(SEARCH_URL).respond(403, text="<!DOCTYPE html><title>Just a moment...</title>")
+    route = respx_mock.post(SEARCH_URL).respond(403, text="<!DOCTYPE html><title>Just a moment...</title>")
 
-    with pytest.raises(SauceNaoError):
+    with pytest.raises(SauceNaoError) as raised:
         await saucenao.search(upload=uploads())
+
+    # no outage either: a retry would only meet the challenge again
+    assert type(raised.value) is SauceNaoError
+    assert str(raised.value) == "HTTP 403"
+    assert route.call_count == 1
 
 
 async def test_account_checks_the_key_with_a_search_by_url(respx_mock, saucenao):
@@ -341,13 +348,13 @@ async def test_a_daily_429_marks_the_day_used_up(respx_mock, saucenao, uploads):
 
 
 async def test_error_texts_hide_the_key(respx_mock, saucenao, uploads):
-    respx_mock.post(SEARCH_URL).respond(500, text=f"Internal error for key {API_KEY}")
+    respx_mock.post(SEARCH_URL).respond(500, json={"header": {"status": 1, "message": f"Internal error for {API_KEY}"}})
 
     with pytest.raises(SauceNaoError) as raised:
         await saucenao.search(upload=uploads())
 
-    assert API_KEY not in str(raised.value)
-    assert "[key]" in str(raised.value)
+    # SauceNAO's own message stays
+    assert str(raised.value) == "HTTP 500: Internal error for [key]"
 
 
 @pytest.mark.parametrize(
@@ -381,6 +388,125 @@ async def test_server_error_raises(respx_mock, saucenao, uploads):
     respx_mock.post(SEARCH_URL).respond(503, text="down")
     with pytest.raises(SauceNaoError):
         await saucenao.search(upload=uploads())
+
+
+async def test_an_answer_that_is_not_json_leaves_the_page_out(respx_mock, saucenao, uploads):
+    respx_mock.post(SEARCH_URL).respond(200, html=CLOUDFLARE_DOWN)
+
+    with pytest.raises(SauceNaoError) as raised:
+        await saucenao.search(upload=uploads())
+
+    assert type(raised.value) is SauceNaoError
+    assert str(raised.value) == "HTTP 200: not JSON"
+
+
+# --- SauceNAO down -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        (520, "HTTP 520 (Cloudflare: unknown error)"),
+        (521, "HTTP 521 (Cloudflare: web server is down)"),
+        (522, "HTTP 522 (Cloudflare: connection timed out)"),
+        (523, "HTTP 523 (Cloudflare: origin is unreachable)"),
+        (524, "HTTP 524 (Cloudflare: a timeout occurred)"),
+        (502, "HTTP 502"),
+        (503, "HTTP 503"),
+    ],
+)
+async def test_a_server_that_is_down_is_retried_once_and_named_without_its_page(
+    respx_mock, saucenao, uploads, clock, answer
+):
+    status, text = answer
+    route = respx_mock.post(SEARCH_URL).respond(status, html=CLOUDFLARE_DOWN)
+
+    with pytest.raises(UnavailableError) as raised:
+        await saucenao.search(upload=uploads())
+
+    assert str(raised.value) == text
+    assert route.call_count == 2
+    assert clock.now == START + RETRY_SECONDS
+    # the image was fetched once
+    assert len(uploads.times) == 1
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.Response(521, html=CLOUDFLARE_DOWN), httpx.ConnectTimeout(""), httpx.ConnectError("refused")],
+    ids=["521", "connect-timeout", "connect-error"],
+)
+async def test_a_retry_that_gets_through_is_the_answer(respx_mock, saucenao, uploads, failure):
+    route = respx_mock.post(SEARCH_URL).mock(side_effect=[failure, httpx.Response(200, json=sauce_response([ANIME]))])
+
+    assert await saucenao.search(upload=uploads()) == [ANIME]
+    assert route.call_count == 2
+    assert saucenao.usage == (10, 100)
+
+
+async def test_no_answer_at_all_is_unavailable(respx_mock, saucenao, uploads):
+    route = respx_mock.post(SEARCH_URL).mock(side_effect=httpx.ConnectError("[Errno 61] Connection refused"))
+
+    with pytest.raises(UnavailableError) as raised:
+        await saucenao.search(upload=uploads())
+
+    assert str(raised.value) == "ConnectError: [Errno 61] Connection refused"
+    assert route.call_count == 2
+
+
+async def test_the_retry_takes_the_failed_requests_slot(respx_mock, saucenao, uploads, clock):
+    route = respx_mock.post(SEARCH_URL).mock(
+        side_effect=[httpx.Response(521, html=CLOUDFLARE_DOWN), *[httpx.Response(200, json=sauce_response([]))] * 5]
+    )
+    await saucenao.search(upload=uploads())
+
+    # three more go out at once: the window of four holds the retry and them
+    await _burst(saucenao, uploads, 4)
+
+    assert route.call_count == 6
+    assert uploads.times == [START, *[START + RETRY_SECONDS] * 3, START + RETRY_SECONDS + SHORT_WINDOW_SECONDS]
+
+
+async def test_a_retry_that_would_miss_the_deadline_is_not_sent(respx_mock, saucenao, uploads, clock):
+    def read_timeout(request: httpx.Request) -> httpx.Response:
+        clock.now += MAX_WAIT_SECONDS
+        raise httpx.ReadTimeout("")
+
+    route = respx_mock.post(SEARCH_URL).mock(side_effect=read_timeout)
+
+    with pytest.raises(UnavailableError) as raised:
+        await saucenao.search(upload=uploads())
+
+    assert str(raised.value) == "ReadTimeout"
+    assert route.call_count == 1
+
+
+async def test_a_key_used_up_during_the_pause_is_not_retried(respx_mock, saucenao, uploads):
+    # one search meets SauceNAO down, the next one the end of the day
+    route = respx_mock.post(SEARCH_URL).mock(
+        side_effect=[httpx.Response(521, html=CLOUDFLARE_DOWN), httpx.Response(429, json=DAILY_LIMIT)]
+    )
+
+    down, used_up = await _burst(saucenao, uploads, 2)
+
+    assert isinstance(down, QuotaExceededError)
+    assert down.daily
+    assert isinstance(used_up, QuotaExceededError)
+    assert route.call_count == 2
+
+
+async def test_the_retry_is_logged_as_a_warning(respx_mock, saucenao, uploads, caplog):
+    respx_mock.post(SEARCH_URL).respond(521, html=CLOUDFLARE_DOWN)
+    caplog.set_level("INFO", logger="mikke")
+
+    with pytest.raises(UnavailableError):
+        await saucenao.search(upload=uploads())
+
+    [record] = [record for record in caplog.records if record.name.startswith("mikke")]
+    assert record.levelname == "WARNING"
+    assert record.getMessage() == (
+        "SauceNAO did not answer (HTTP 521 (Cloudflare: web server is down)), retrying in 3 s"
+    )
 
 
 async def test_failed_search_status_without_results_raises(respx_mock, saucenao, uploads):

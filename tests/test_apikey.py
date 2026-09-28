@@ -1,6 +1,7 @@
 """Users' own SauceNAO keys: /apikey, a bare key in private, the buttons, and where they are used."""
 
 import asyncio
+import logging
 import time
 
 import httpx
@@ -149,14 +150,31 @@ async def test_a_key_used_up_for_today_is_saved(harness, respx_mock):
 
 
 async def test_a_failed_check_saves_nothing_and_logs_no_key(harness, respx_mock, caplog):
-    respx_mock.get(SEARCH_URL).mock(side_effect=httpx.ConnectError(f"GET {SEARCH_URL}?api_key={USER_KEY} {USER_KEY}"))
+    respx_mock.get(SEARCH_URL).mock(side_effect=RuntimeError(f"GET {SEARCH_URL}?api_key={USER_KEY} {USER_KEY}"))
 
     await harness.feed(update(message(text=USER_KEY)))
 
     assert await harness.keys.get(7) is None
     assert [reply.text for reply in _replies(harness)] == [texts.KEY_CHECK_FAILED]
     [record] = [record for record in caplog.records if record.levelname == "ERROR"]
-    assert record.getMessage().startswith("Checking a SauceNAO key failed: ConnectError")
+    assert record.getMessage().startswith("Checking a SauceNAO key failed: RuntimeError")
+    assert USER_KEY not in caplog.text
+
+
+async def test_saucenao_down_during_a_check_is_a_warning(harness, respx_mock, caplog):
+    route = respx_mock.get(SEARCH_URL).mock(
+        side_effect=httpx.ConnectError(f"GET {SEARCH_URL}?api_key={USER_KEY} {USER_KEY}")
+    )
+
+    await harness.feed(update(message(text=USER_KEY)))
+
+    assert await harness.keys.get(7) is None
+    assert [reply.text for reply in _replies(harness)] == [texts.KEY_CHECK_FAILED]
+    assert route.call_count == 2
+    assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
+    [record] = [record for record in caplog.records if record.name == "mikke.apikey"]
+    assert record.levelname == "WARNING"
+    assert record.getMessage().startswith("Checking a SauceNAO key failed: UnavailableError: ConnectError")
     assert USER_KEY not in caplog.text
 
 

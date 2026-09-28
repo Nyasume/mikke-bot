@@ -14,7 +14,7 @@ from mikke.media import Media
 from mikke.reports import Hit, Outcome, Quota
 from mikke.results import keyboard
 from mikke.search import CACHE_SIZE, CACHE_TTL_SECONDS, Answer, InvalidFileError, KeyLocks, download
-from mikke.tracemoe import QuotaExceededError, TraceMoe
+from mikke.tracemoe import QuotaExceededError, TraceMoe, UnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,10 @@ class SceneSearcher:
         except InvalidFileError as e:
             logger.info("Invalid file %s: %s", key, e)
             return Alert(texts.SCENE_INVALID_FILE, Outcome("invalid_file", error=str(e)))
+        except UnavailableError as e:
+            # trace.moe is down, not our bug
+            logger.warning("trace.moe did not answer the scene search for %s: %s", key, e)
+            return Alert(texts.SCENE_ERROR, Outcome("error", error=f"{type(e).__name__}: {e}"))
         except Exception as e:
             logger.exception("Scene search failed for %s", key)
             return Alert(texts.SCENE_ERROR, Outcome("error", error=f"{type(e).__name__}: {e}"))

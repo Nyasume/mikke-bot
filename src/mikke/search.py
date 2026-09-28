@@ -17,7 +17,7 @@ from mikke.keys import KeyStore, UserKey
 from mikke.media import Media
 from mikke.reports import KeyUse, Outcome, Quota
 from mikke.results import Scored, fallback_keyboard, hits, render, select
-from mikke.saucenao import InvalidKeyError, QuotaExceededError, SauceNao
+from mikke.saucenao import InvalidKeyError, QuotaExceededError, SauceNao, UnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +100,14 @@ def _with_quota(answer: Answer, sauce: SauceNao, whose: str) -> Answer:
         return answer
     used, limit = sauce.usage
     return replace(answer, outcome=replace(answer.outcome, quota=Quota(used, limit, whose)))
+
+
+def _failed(error: Exception, own: KeyUse | None, stored: UserKey | None) -> Outcome:
+    """A failed search, for the owner report, without the user's key."""
+    text = f"{type(error).__name__}: {error}"
+    if stored is not None:
+        text = text.replace(stored.api_key, "[key]")
+    return Outcome("error", error=text, key=own)
 
 
 @dataclass(frozen=True)
@@ -219,13 +227,13 @@ class Searcher:
         except InvalidFileError as e:
             logger.info("Invalid file %s: %s", key, e)
             answer = self._answer(texts.INVALID_FILE, Outcome("invalid_file", error=str(e), key=own), None, asker)
+        except UnavailableError as e:
+            # SauceNAO is down, not our bug: the other engines may still find it
+            logger.warning("SauceNAO did not answer the search for %s: %s", key, e)
+            answer = self._answer(texts.SAUCENAO_DOWN, _failed(e, own, stored), fallback_keyboard(image_url), asker)
         except Exception as e:
             logger.exception("Search failed for %s", key)
-            error = f"{type(e).__name__}: {e}"
-            if stored is not None:
-                error = error.replace(stored.api_key, "[key]")
-            failed = Outcome("error", error=error, key=own)
-            answer = self._answer(texts.ERROR, failed, fallback_keyboard(image_url), asker)
+            answer = self._answer(texts.ERROR, _failed(e, own, stored), fallback_keyboard(image_url), asker)
         else:
             self._cache[key] = scored
         # what SauceNAO sent with this search's answer (nothing ran since), or the last known numbers

@@ -3,8 +3,16 @@ import asyncio
 import httpx
 import pytest
 
-from mikke.tracemoe import QUOTA_RETRY_SECONDS, SEARCH_URL, QuotaExceededError, TraceMoe, TraceMoeError
-from payloads import IMAGE, SCENE, Clock, trace_response
+from mikke.outages import RETRY_SECONDS
+from mikke.tracemoe import (
+    QUOTA_RETRY_SECONDS,
+    SEARCH_URL,
+    QuotaExceededError,
+    TraceMoe,
+    TraceMoeError,
+    UnavailableError,
+)
+from payloads import CLOUDFLARE_DOWN, IMAGE, SCENE, Clock, trace_response
 
 QUOTA_DEPLETED = {"quota": 100, "quotaUsed": 100, "error": "Search quota depleted (quota per 24 hours: 100, used: 100)"}
 
@@ -16,7 +24,7 @@ def clock() -> Clock:
 
 @pytest.fixture
 def tracemoe(http: httpx.AsyncClient, clock: Clock) -> TraceMoe:
-    return TraceMoe(http, clock=clock)
+    return TraceMoe(http, clock=clock, sleep=clock.sleep)
 
 
 def _image(filename: str = "image.jpg"):
@@ -70,30 +78,114 @@ async def test_quota_depleted_blocks_without_calling_the_api(respx_mock, tracemo
 
 
 @pytest.mark.parametrize(
-    ("status", "body", "expected"),
+    ("answer", "raised"),
     [
-        (402, {"error": "Concurrency limit exceeded"}, "HTTP 402: Concurrency limit exceeded"),
-        (503, {"error": "Error: Search queue is full"}, "HTTP 503: Error: Search queue is full"),
-        (400, {"error": "Failed to process image"}, "HTTP 400: Failed to process image"),
-        (500, None, "HTTP 500: boom"),
-        (200, {"error": "something odd", "result": []}, "HTTP 200: something odd"),
+        ((402, {"error": "Concurrency limit exceeded"}), (TraceMoeError, "HTTP 402: Concurrency limit exceeded")),
+        ((503, {"error": "Error: Search queue is full"}), (UnavailableError, "HTTP 503: Error: Search queue is full")),
+        ((400, {"error": "Failed to process image"}), (TraceMoeError, "HTTP 400: Failed to process image")),
+        ((500, None), (UnavailableError, "HTTP 500")),
+        ((200, {"error": "something odd", "result": []}), (TraceMoeError, "HTTP 200: something odd")),
     ],
 )
-async def test_errors_raise_without_blocking(respx_mock, tracemoe, status, body, expected):
+async def test_errors_raise_without_blocking(respx_mock, tracemoe, answer, raised):
+    status, body = answer
     if body is None:
-        respx_mock.post(SEARCH_URL).respond(status, text="boom")
+        respx_mock.post(SEARCH_URL).respond(status, html=CLOUDFLARE_DOWN)
     else:
         respx_mock.post(SEARCH_URL).respond(status, json=body)
 
-    with pytest.raises(TraceMoeError, match=expected):
+    with pytest.raises(TraceMoeError) as error:
         await tracemoe.search(_image())
+    assert (type(error.value), str(error.value)) == raised
     assert not tracemoe.exhausted
 
 
 async def test_non_json_answer_is_an_error(respx_mock, tracemoe):
-    respx_mock.post(SEARCH_URL).respond(200, text="<html>")
-    with pytest.raises(TraceMoeError, match="not JSON"):
+    respx_mock.post(SEARCH_URL).respond(200, html=CLOUDFLARE_DOWN)
+    with pytest.raises(TraceMoeError) as raised:
         await tracemoe.search(_image())
+    assert (type(raised.value), str(raised.value)) == (TraceMoeError, "HTTP 200: not JSON")
+
+
+# --- trace.moe down ------------------------------------------------------------
+
+
+class Uploads:
+    """An upload callable for `search` that counts the images it gave."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    async def __call__(self) -> tuple[bytes, str]:
+        self.count += 1
+        return IMAGE, "image.jpg"
+
+
+async def test_a_server_that_is_down_is_retried_once_with_the_same_image(respx_mock, tracemoe, clock):
+    route = respx_mock.post(SEARCH_URL).respond(521, html=CLOUDFLARE_DOWN)
+    upload = Uploads()
+
+    with pytest.raises(UnavailableError) as raised:
+        await tracemoe.search(upload)
+
+    assert str(raised.value) == "HTTP 521 (Cloudflare: web server is down)"
+    assert route.call_count == 2
+    assert upload.count == 1
+    assert clock.now == 1_000.0 + RETRY_SECONDS
+    assert not tracemoe.exhausted
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.Response(502, text="Bad Gateway"), httpx.ConnectTimeout(""), httpx.RemoteProtocolError("disconnected")],
+    ids=["502", "connect-timeout", "disconnected"],
+)
+async def test_a_retry_that_gets_through_is_the_answer(respx_mock, tracemoe, failure):
+    route = respx_mock.post(SEARCH_URL).mock(side_effect=[failure, httpx.Response(200, json=trace_response([SCENE]))])
+
+    assert await tracemoe.search(_image()) == [SCENE]
+    assert route.call_count == 2
+    assert tracemoe.usage == (2, 100)
+
+
+async def test_no_answer_at_all_is_unavailable(respx_mock, tracemoe):
+    route = respx_mock.post(SEARCH_URL).mock(side_effect=httpx.ConnectError("[Errno 61] Connection refused"))
+
+    with pytest.raises(UnavailableError) as raised:
+        await tracemoe.search(_image())
+
+    assert str(raised.value) == "ConnectError: [Errno 61] Connection refused"
+    assert route.call_count == 2
+
+
+async def test_a_read_timeout_is_not_retried(respx_mock, tracemoe):
+    # it came after a whole minute in which the other presses waited for their turn
+    route = respx_mock.post(SEARCH_URL).mock(side_effect=httpx.ReadTimeout(""))
+
+    with pytest.raises(UnavailableError) as raised:
+        await tracemoe.search(_image())
+
+    assert str(raised.value) == "ReadTimeout"
+    assert route.call_count == 1
+
+
+async def test_the_retry_keeps_the_turn(respx_mock, tracemoe):
+    running = peak = 0
+
+    async def slow(request: httpx.Request) -> httpx.Response:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return httpx.Response(200, json=trace_response([SCENE]))
+
+    respx_mock.post(SEARCH_URL).mock(side_effect=[httpx.Response(521, html=CLOUDFLARE_DOWN), slow, slow])
+
+    results = await asyncio.gather(*(tracemoe.search(_image()) for _ in range(2)))
+
+    assert results == [[SCENE]] * 2
+    assert peak == 1
 
 
 async def test_one_search_at_a_time(respx_mock, tracemoe):

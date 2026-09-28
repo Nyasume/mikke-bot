@@ -14,7 +14,7 @@ from aiohttp import test_utils
 from sentry_sdk.envelope import Envelope
 from sentry_sdk.transport import Transport
 
-from mikke import texts
+from mikke import saucenao, texts, tracemoe
 from mikke.config import Settings, derive_secret
 from mikke.observability import FILTERED, Scrubber, init_sentry, redact
 from mikke.saucenao import SEARCH_URL, QuotaExceededError
@@ -26,6 +26,7 @@ from payloads import (
     API_KEY,
     BOT_TOKEN,
     BOT_USERNAME,
+    CLOUDFLARE_DOWN,
     EXTRA_BOT_TOKEN,
     EXTRA_BOT_USERNAME,
     PHOTO,
@@ -252,7 +253,7 @@ async def test_every_bots_token_and_webhook_secret_is_filtered(sentry, caplog):
 
 async def test_searches_leave_no_api_key_in_the_breadcrumbs(sentry, respx_mock):
     harness, transport = sentry()
-    respx_mock.post(SEARCH_URL).respond(500, text="Internal Server Error")
+    respx_mock.post(SEARCH_URL).respond(400, text="Bad Request")
 
     await harness.feed(_photo())
 
@@ -314,7 +315,7 @@ async def test_a_users_key_never_reaches_sentry_or_the_owner(sentry, respx_mock)
 
 async def test_a_failed_key_check_reaches_sentry_without_the_key(sentry, respx_mock):
     harness, transport = sentry()
-    respx_mock.get(SEARCH_URL).mock(side_effect=httpx.ConnectError(f"GET {SEARCH_URL}?api_key={USER_KEY} ({USER_KEY})"))
+    respx_mock.get(SEARCH_URL).mock(side_effect=RuntimeError(f"GET {SEARCH_URL}?api_key={USER_KEY} ({USER_KEY})"))
 
     await harness.feed(update(message(text=USER_KEY)))
 
@@ -325,7 +326,8 @@ async def test_a_failed_key_check_reaches_sentry_without_the_key(sentry, respx_m
 
 async def test_a_failed_search_with_a_users_key_keeps_it_out_of_sentry_and_the_report(sentry, respx_mock):
     harness, transport = sentry()
-    respx_mock.post(SEARCH_URL).respond(500, text=f"error for api_key={USER_KEY} and {USER_KEY}")
+    header = {"status": -3, "message": f"error for api_key={USER_KEY} and {USER_KEY}"}
+    respx_mock.post(SEARCH_URL).respond(400, json={"header": header})
     await harness.keys.set(7, USER_KEY)
 
     await harness.feed(_photo())
@@ -334,7 +336,7 @@ async def test_a_failed_search_with_a_users_key_keeps_it_out_of_sentry_and_the_r
     assert event["logentry"]["message"].startswith("Search failed")
     assert USER_KEY not in transport.sent
     [report] = harness.session.calls(SendRichMessage)
-    assert "SauceNaoError: HTTP 500" in report.rich_message.html
+    assert "SauceNaoError: HTTP 400: error for api_key=[Filtered] and [key]" in report.rich_message.html
     assert USER_KEY not in report.rich_message.html
 
 
@@ -366,7 +368,7 @@ async def test_events_name_the_bot_that_received_the_update(sentry, found, respx
     harness.sessions[receiver].fail_once[EditMessageText] = RuntimeError("telegram exploded")
 
     await harness.feed(_photo(), bot)  # the error handler's event
-    respx_mock.post(SEARCH_URL).respond(500, text="boom")
+    respx_mock.post(SEARCH_URL).respond(400, text="boom")
     await harness.feed(update(message(photo=[{**PHOTO[1], "file_unique_id": "other-u"}])), bot)  # a searcher's
 
     handler_error, search_error = transport.events
@@ -421,7 +423,7 @@ async def test_img_route_error_is_sent_once(sentry, monkeypatch):
 
 async def test_a_failed_inline_search_reaches_sentry_without_the_searched_url(sentry, respx_mock):
     harness, transport = sentry()
-    respx_mock.get(SEARCH_URL).respond(500, text="Internal Server Error")
+    respx_mock.get(SEARCH_URL).respond(400, text="Bad Request")
 
     await harness.searcher.search_url("https://example.com/private-pic.png")
 
@@ -481,6 +483,31 @@ async def test_trace_moe_quota_is_not_sent(sentry, respx_mock):
     assert transport.events == []
 
 
+async def test_engines_that_are_down_are_not_sent(sentry, respx_mock):
+    harness, transport = sentry()
+    respx_mock.post(SEARCH_URL).respond(521, html=CLOUDFLARE_DOWN)
+    respx_mock.get(SEARCH_URL).mock(side_effect=httpx.ConnectTimeout(""))
+    respx_mock.post(TRACE_URL).respond(503, json={"error": "Error: Search queue is full"})
+    media = message(photo=PHOTO)
+
+    await harness.feed(_photo())
+    await harness.feed(button_press(bot_answer(media["chat"], media)))
+    await harness.feed(update(message(text=USER_KEY)))
+
+    assert transport.events == []
+    # the owner still sees them
+    sauce, scene = (call.rich_message.html for call in harness.session.calls(SendRichMessage))
+    assert "UnavailableError: HTTP 521 (Cloudflare: web server is down)" in sauce
+    assert "UnavailableError: HTTP 503: Error: Search queue is full" in scene
+
+
+@pytest.mark.parametrize("error", [saucenao.UnavailableError("HTTP 521"), tracemoe.UnavailableError("HTTP 502")])
+async def test_engines_down_logged_as_errors_are_dropped(sentry, error):
+    _, transport = sentry()
+    logging.getLogger("mikke.test").error("down", exc_info=error)
+    assert transport.events == []
+
+
 async def test_flooding_is_not_sent(sentry, found):
     harness, transport = sentry()
     for _ in range(25):
@@ -527,7 +554,7 @@ async def test_a_chat_the_bot_cannot_write_to_is_neither_sent_nor_reported(sentr
 
 async def test_an_admin_who_never_started_a_bot_is_not_sent(sentry, respx_mock):
     harness, transport = sentry(extra_bot_tokens=[EXTRA_BOT_TOKEN])
-    respx_mock.post(SEARCH_URL).respond(500, text="boom")
+    respx_mock.post(SEARCH_URL).respond(400, text="boom")
     extra = harness.sessions[1]
     extra.chat_errors[ADMIN_ID] = TelegramForbiddenError(
         method=SendMessage(chat_id=ADMIN_ID, text="x"), message="Forbidden: bot can't initiate conversation with a user"

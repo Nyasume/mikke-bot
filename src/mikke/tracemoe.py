@@ -6,6 +6,8 @@ from collections.abc import Awaitable, Callable
 
 import httpx
 
+from mikke import outages
+
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://api.trace.moe/search"
@@ -26,6 +28,10 @@ class TraceMoeError(Exception):
     """trace.moe answered with an error."""
 
 
+class UnavailableError(TraceMoeError):
+    """trace.moe did not answer, also on the retry: down, overloaded or out of reach. Not our bug."""
+
+
 class TraceMoe:
     def __init__(
         self,
@@ -33,11 +39,13 @@ class TraceMoe:
         api_key: str | None = None,
         *,
         clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._client = client
         # a sponsor's key raises the quota; without it the bot searches as a guest by IP
         self._headers = {"x-trace-key": api_key} if api_key else {}
         self._clock = clock
+        self._sleep = sleep
         self._blocked_until = 0.0
         # A second search sent while one is running fails with "Concurrency limit exceeded"
         self._lock = asyncio.Lock()
@@ -71,13 +79,7 @@ class TraceMoe:
         async with self._lock:
             # the quota may have run out while this search was waiting for its turn
             self.check_quota()
-            image, filename = await upload()
-            response = await self._client.post(
-                SEARCH_URL,
-                params={"anilistInfo": "", "cutBorders": ""},
-                files={"image": (filename, image)},
-                headers=self._headers,
-            )
+            response = await self._send(*await upload())
 
         data: object = None
         with contextlib.suppress(ValueError):
@@ -90,11 +92,42 @@ class TraceMoe:
             logger.info("trace.moe quota used up, pausing scene searches for %.0f s", QUOTA_RETRY_SECONDS)
             self._blocked_until = self._clock() + QUOTA_RETRY_SECONDS
             raise QuotaExceededError
+        # the status, with trace.moe's own message if it sent one; never the page itself
+        failure = f"{outages.status(response)}: {error}" if error else outages.status(response)
+        if outages.is_down(response):
+            raise UnavailableError(failure)
         if response.is_error or error:
-            raise TraceMoeError(f"HTTP {response.status_code}: {error or response.text[:300]}")
+            raise TraceMoeError(failure)
         if not isinstance(data, dict):
-            raise TraceMoeError(f"not JSON: {response.text[:300]}")
+            raise TraceMoeError(f"{outages.status(response)}: not JSON")
         return data.get("result") or []
+
+    async def _send(self, image: bytes, filename: str) -> httpx.Response:
+        """Send the search, and once more if trace.moe is down (a 5xx) or out of reach.
+
+        The retry goes out in this search's turn, with the same image; not after a timeout that took
+        the whole minute, which held the line long enough. Out of reach at the end is `UnavailableError`.
+        """
+        retried = False
+        while True:
+            try:
+                response = await self._client.post(
+                    SEARCH_URL,
+                    params={"anilistInfo": "", "cutBorders": ""},
+                    files={"image": (filename, image)},
+                    headers=self._headers,
+                )
+            except outages.UNREACHABLE as e:
+                failure = outages.describe(e)
+                if retried or isinstance(e, outages.SLOW):
+                    raise UnavailableError(failure) from None
+            else:
+                if retried or not outages.is_down(response):
+                    return response
+                failure = outages.status(response)
+            logger.warning("trace.moe did not answer (%s), retrying in %.0f s", failure, outages.RETRY_SECONDS)
+            await self._sleep(outages.RETRY_SECONDS)
+            retried = True
 
     def _track(self, data: dict, *, searched: bool) -> None:
         # results and "Search quota depleted" carry it; quotaUsed does not count the search it answers yet

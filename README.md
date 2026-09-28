@@ -60,7 +60,7 @@ Tests are offline: Telegram is replaced by a fake session, SauceNAO and trace.mo
 
 ## Error monitoring
 
-With `SENTRY_DSN` set, unexpected errors go to [Sentry](https://sentry.io): handler and HTTP route exceptions and everything logged at ERROR. Used up quotas, empty results, flood protection, users' keys SauceNAO rejects and users who blocked the bot or deleted a message are not errors and stay in the logs. Events name the bot that received the update. The bot tokens, the API keys (users' own among them) and the webhook secrets are filtered out of every event and breadcrumb, and no Telegram user data beyond numeric ids is sent. Docker images built by CI carry the release `mikke-bot@<commit sha>` (`SENTRY_RELEASE` build arg).
+With `SENTRY_DSN` set, unexpected errors go to [Sentry](https://sentry.io): handler and HTTP route exceptions and everything logged at ERROR. Used up quotas, SauceNAO or trace.moe being down, empty results, flood protection, users' keys SauceNAO rejects and users who blocked the bot or deleted a message are not errors and stay in the logs. Events name the bot that received the update. The bot tokens, the API keys (users' own among them) and the webhook secrets are filtered out of every event and breadcrumb, and no Telegram user data beyond numeric ids is sent. Docker images built by CI carry the release `mikke-bot@<commit sha>` (`SENTRY_RELEASE` build arg).
 
 ## Credits
 

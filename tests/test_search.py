@@ -15,6 +15,7 @@ from payloads import (
     ANIME,
     API_KEY,
     BOT_TOKEN,
+    CLOUDFLARE_DOWN,
     DAILY_LIMIT,
     PUBLIC_URL,
     UNKNOWN_KEY,
@@ -150,17 +151,53 @@ async def test_http_429_answers_limit_reached(respx_mock, harness):
     assert answer.outcome == Outcome("limit")
 
 
-async def test_api_error_answers_error(respx_mock, harness):
-    respx_mock.post(SEARCH_URL).respond(500, text="boom")
+async def test_api_error_answers_error(respx_mock, harness, caplog):
+    respx_mock.post(SEARCH_URL).respond(400, text="boom")
 
     answer = await harness.searcher.search_file(harness.bot, PHOTO)
 
     assert answer.text == texts.ERROR
     assert answer.outcome.status == "error"
-    assert answer.outcome.error.startswith("SauceNaoError: HTTP 500")
+    assert answer.outcome.error == "SauceNaoError: HTTP 400"
+    assert [record.getMessage() for record in caplog.records if record.levelname == "ERROR"] == [
+        "Search failed for photo-unique"
+    ]
     # errors are not cached
     respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME]))
     assert (await harness.searcher.search_file(harness.bot, PHOTO)).text.startswith("<b>One Piece")
+
+
+async def test_saucenao_down_sends_to_the_other_engines(respx_mock, harness, caplog):
+    route = respx_mock.post(SEARCH_URL).respond(521, html=CLOUDFLARE_DOWN)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO)
+
+    assert answer.text == texts.SAUCENAO_DOWN
+    assert [button.text for button in answer.keyboard.inline_keyboard[0]] == ["Google Lens", "Yandex", "Bing"]
+    assert answer.outcome == Outcome("error", error="UnavailableError: HTTP 521 (Cloudflare: web server is down)")
+    assert route.call_count == 2
+    # SauceNAO's outage, not our bug: no error for Sentry
+    assert [record.levelname for record in caplog.records if record.name.startswith("mikke")] == [
+        "WARNING",
+        "WARNING",
+    ]
+    assert "Search failed" not in caplog.text
+    # an outage is not cached
+    respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME]))
+    assert (await harness.searcher.search_file(harness.bot, PHOTO)).text.startswith("<b>One Piece")
+
+
+async def test_saucenao_down_with_a_users_key_does_not_try_the_shared_one(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).mock(side_effect=httpx.ConnectTimeout(""))
+    await harness.keys.set(7, USER_KEY)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7, private=True))
+
+    assert answer.text == texts.SAUCENAO_DOWN
+    assert answer.outcome == Outcome("error", error="UnavailableError: ConnectTimeout", key="own")
+    # SauceNAO is down for every key: the search and its retry, both with the user's
+    assert [call.request.url.params["api_key"] for call in route.calls] == [USER_KEY, USER_KEY]
+    assert await harness.keys.get(7) == UserKey(USER_KEY, valid=True)
 
 
 async def test_file_telegram_refuses_is_invalid(respx_mock, harness):

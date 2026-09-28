@@ -153,7 +153,7 @@ def make_harness(http: httpx.AsyncClient, tmp_path):
         keys = KeyStore(settings.data_dir / "mikke.sqlite3")
         cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
         searcher = Searcher(saucenao, settings.public_url, keys, cache=cache)
-        tracemoe = TraceMoe(http, clock=clock)
+        tracemoe = TraceMoe(http, clock=clock, sleep=clock.sleep)
         scene_cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
         scenes = SceneSearcher(tracemoe, cache=scene_cache)
         dp = build_dispatcher(settings, searcher, scenes, reporter, keys)

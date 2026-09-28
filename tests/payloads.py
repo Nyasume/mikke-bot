@@ -56,6 +56,11 @@ def sauce_response(results: list[dict], *, short_remaining: int = 3, long_remain
 # What SauceNAO answered to a made-up key on 2026-09-28, with HTTP 403
 UNKNOWN_KEY = {"header": {"status": -1, "message": "The anonymous account type does not permit API usage."}}
 DAILY_LIMIT = {"header": {"status": -2, "message": "Daily Search Limit Exceeded."}}
+# How Cloudflare's page starts when SauceNAO's server is down, as it came on 2026-09-28 with HTTP 521
+CLOUDFLARE_DOWN = (
+    '<!DOCTYPE html>\n<!--[if lt IE 7]> <html class="no-js ie6 oldie" lang="en-US"> <![endif]-->\n'
+    "<head><title>saucenao.com | 521: Web server is down</title></head><body>...</body></html>"
+)
 
 
 def result(similarity: float, **data: Any) -> dict:

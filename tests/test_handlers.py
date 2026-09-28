@@ -20,6 +20,7 @@ from payloads import (
     ANIME,
     BOT_TOKEN,
     BOT_USERNAME,
+    CLOUDFLARE_DOWN,
     FAV_GROUP,
     GROUP,
     PHOTO,
@@ -512,9 +513,10 @@ def scene_found(respx_mock):
         ({"json": sauce_response([ANIME])}, "<b>One Piece (Ep. 12)</b>", ["View on AniDB", "MAL", "AniList"]),
         ({"json": sauce_response([])}, texts.NO_RESULT, ["Google Lens", "Yandex", "Bing"]),
         ({"status_code": 429}, texts.LIMIT_REACHED, ["Google Lens", "Yandex", "Bing"]),
-        ({"status_code": 500}, texts.ERROR, ["Google Lens", "Yandex", "Bing"]),
+        ({"status_code": 400}, texts.ERROR, ["Google Lens", "Yandex", "Bing"]),
+        ({"status_code": 521, "html": CLOUDFLARE_DOWN}, texts.SAUCENAO_DOWN, ["Google Lens", "Yandex", "Bing"]),
     ],
-    ids=["result", "no-result", "limit", "error"],
+    ids=["result", "no-result", "limit", "error", "saucenao-down"],
 )
 async def test_chat_answers_end_with_the_scene_button(harness, respx_mock, response, text, first_row):
     respx_mock.post(SEARCH_URL).respond(**response)
@@ -618,7 +620,7 @@ async def test_scene_error_gets_an_alert_and_is_reported(harness, respx_mock):
     assert _sent(harness) == []
     [report] = harness.session.calls(SendRichMessage)
     assert report.chat_id == ADMIN_ID
-    assert "TraceMoeError: HTTP 503: Error: Search queue is full" in report.rich_message.html
+    assert "UnavailableError: HTTP 503: Error: Search queue is full" in report.rich_message.html
 
 
 async def test_scene_error_is_not_cached(harness, respx_mock):
@@ -628,7 +630,8 @@ async def test_scene_error_is_not_cached(harness, respx_mock):
     route = respx_mock.post(TRACE_URL).respond(json=trace_response([SCENE]))
     await harness.feed(button_press(bot_answer(PRIVATE, message(photo=PHOTO))))
 
-    assert route.call_count == 2
+    # the failed search, its retry, and the second press
+    assert route.call_count == 3
     assert _sent(harness)[-1].text.startswith("🎬 <b>Is the Order a Rabbit?</b>")
 
 
