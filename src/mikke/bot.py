@@ -11,6 +11,7 @@ from aiogram.types import TelegramObject
 
 from mikke.config import Settings
 from mikke.handlers import build_router, on_error
+from mikke.keys import KeyStore
 from mikke.observability import tag_bot
 from mikke.reports import Reporter
 from mikke.scenes import SceneSearcher
@@ -58,9 +59,11 @@ class InFlight(BaseMiddleware):
             await asyncio.wait_for(self._idle.wait(), grace)
 
 
-def build_dispatcher(settings: Settings, searcher: Searcher, scenes: SceneSearcher, reporter: Reporter) -> Dispatcher:
+def build_dispatcher(
+    settings: Settings, searcher: Searcher, scenes: SceneSearcher, reporter: Reporter, keys: KeyStore
+) -> Dispatcher:
     """One dispatcher for every bot: aiogram hands each handler the bot that received the update as `bot`."""
-    dp = Dispatcher(searcher=searcher, scenes=scenes, reporter=reporter)
+    dp = Dispatcher(searcher=searcher, scenes=scenes, reporter=reporter, keys=keys)
     dp["in_flight"] = in_flight = InFlight()
     dp.update.outer_middleware(in_flight)
     # the bot's username on Sentry events; aiogram runs the error handler outside the update middlewares

@@ -2,6 +2,8 @@
 # GitHub Actions builds the image into GHCR; deploy.sh pulls it and restarts the service.
 # Traefik (file provider) routes https://anybyte.org/telebot/mikke -> mikke:8080 with the
 # /telebot/mikke prefix stripped, so no ports are published here.
+# The named volume mikke-data keeps /data (users' SauceNAO keys, SQLite) across deploys;
+# Docker creates it on the first `up`, owned by the image's bot user.
 services:
   mikke:
     image: ghcr.io/nyasume/mikke-bot:latest
@@ -10,6 +12,10 @@ services:
     env_file: .env
     environment:
       BOT_MODE: webhook
+      # here, not in .env: a blank DATA_DIR= line there would override the image's
+      DATA_DIR: /data
+    volumes:
+      - data:/data
     networks:
       - bots-network
     logging:
@@ -21,3 +27,7 @@ services:
 networks:
   bots-network:
     external: true
+
+volumes:
+  data:
+    name: mikke-data

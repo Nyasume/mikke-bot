@@ -16,6 +16,7 @@ from cachetools import TTLCache
 
 from mikke.bot import build_bot, build_dispatcher
 from mikke.config import Settings
+from mikke.keys import KeyStore
 from mikke.reports import Reporter
 from mikke.saucenao import SauceNao
 from mikke.scenes import SceneSearcher
@@ -96,6 +97,7 @@ class Harness:
     scenes: SceneSearcher
     tracemoe: TraceMoe
     clock: Clock
+    keys: KeyStore
 
     @property
     def bot(self) -> Bot:
@@ -136,20 +138,21 @@ async def http() -> AsyncGenerator[httpx.AsyncClient]:
 
 
 @pytest.fixture
-def make_harness(http: httpx.AsyncClient):
+def make_harness(http: httpx.AsyncClient, tmp_path):
     def factory(**overrides: Any) -> Harness:
-        settings = make_settings(**overrides)
+        settings = make_settings(**{"data_dir": tmp_path} | overrides)
         bots = [build_bot(token, session=FakeSession()) for token in settings.bot_tokens()]
         clock = Clock()
         saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value(), clock=clock, sleep=clock.sleep)
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
+        keys = KeyStore(settings.data_dir / "mikke.sqlite3")
         cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
-        searcher = Searcher(saucenao, settings.public_url, cache=cache)
+        searcher = Searcher(saucenao, settings.public_url, keys, cache=cache)
         tracemoe = TraceMoe(http, clock=clock)
         scene_cache = TTLCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL_SECONDS, timer=clock)
         scenes = SceneSearcher(tracemoe, cache=scene_cache)
-        dp = build_dispatcher(settings, searcher, scenes, reporter)
-        return Harness(settings, bots, dp, searcher, saucenao, scenes, tracemoe, clock)
+        dp = build_dispatcher(settings, searcher, scenes, reporter, keys)
+        return Harness(settings, bots, dp, searcher, saucenao, scenes, tracemoe, clock, keys)
 
     return factory
 

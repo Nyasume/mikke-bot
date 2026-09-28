@@ -9,7 +9,8 @@ from pydantic import ValidationError
 
 from mikke.bot import InFlight, build_bot, build_dispatcher
 from mikke.config import Settings
-from mikke.observability import init_sentry
+from mikke.keys import KeyStore
+from mikke.observability import init_sentry, redact
 from mikke.reports import Reporter
 from mikke.saucenao import SauceNao
 from mikke.scenes import SceneSearcher
@@ -21,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 # Docker sends SIGKILL 10 s after SIGTERM
 SHUTDOWN_GRACE_SECONDS = 8.0
+# in DATA_DIR
+DATABASE = "mikke.sqlite3"
 
 
 class RedactingFormatter(logging.Formatter):
@@ -34,7 +37,8 @@ class RedactingFormatter(logging.Formatter):
         text = super().format(record)
         for secret in self._secrets:
             text = text.replace(secret, "<redacted>")
-        return text
+        # and the ones only known by their shape, like users' SauceNAO keys in URLs
+        return redact(text)
 
 
 async def _wait_for_stop_signal() -> None:
@@ -53,10 +57,11 @@ async def run(settings: Settings) -> None:
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=10.0)) as http:
         saucenao = SauceNao(http, settings.saucenao_api_key.get_secret_value())
         reporter = Reporter(settings.admin_ids, results=settings.report_results, errors=settings.report_errors)
-        searcher = Searcher(saucenao, settings.public_url)
+        keys = KeyStore(settings.data_dir / DATABASE)
+        searcher = Searcher(saucenao, settings.public_url, keys)
         trace_key = settings.trace_moe_api_key.get_secret_value() if settings.trace_moe_api_key else None
         scenes = SceneSearcher(TraceMoe(http, trace_key))
-        dp = build_dispatcher(settings, searcher, scenes, reporter)
+        dp = build_dispatcher(settings, searcher, scenes, reporter, keys)
 
         webhook = settings.bot_mode == "webhook"
         secret = settings.webhook_secret.get_secret_value() if webhook and settings.webhook_secret else None

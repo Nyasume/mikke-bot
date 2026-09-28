@@ -1,5 +1,6 @@
 """Activity reports: one rich message to the owner per search, a plain one when Telegram rejects it."""
 
+import httpx
 import pytest
 from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
 from aiogram.methods import (
@@ -17,6 +18,7 @@ from mikke.tracemoe import SEARCH_URL as TRACE_URL
 from payloads import (
     ADMIN_ID,
     ANIME,
+    API_KEY,
     ASKER,
     BASIC_GROUP,
     BOT_TOKEN,
@@ -26,6 +28,8 @@ from payloads import (
     PRIVATE_SUPERGROUP,
     PUBLIC_GROUP,
     SCENE,
+    UNKNOWN_KEY,
+    USER_KEY,
     bot_answer,
     button_press,
     message,
@@ -414,3 +418,41 @@ async def test_reports_can_be_switched_off(make_harness, respx_mock):
 
     assert [call.chat_id for call in harness.session.calls(SendMessage)] == [PRIVATE["id"]]
     assert _reports(harness) == []
+
+
+# --- users' own SauceNAO keys ------------------------------------------------
+
+
+async def test_a_search_with_the_users_own_key_says_so(harness, found):
+    await harness.keys.set(7, USER_KEY)
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    html = _report(harness)
+    assert f"<footer>via @{BOT_USERNAME} · 🔑 own key · " in html
+    assert USER_KEY not in html
+
+
+async def test_a_rejected_key_is_noted_in_the_report_and_as_an_event(harness, respx_mock):
+    responses = {USER_KEY: httpx.Response(403, json=UNKNOWN_KEY), API_KEY: httpx.Response(200, json=sauce_response([]))}
+    respx_mock.post(SEARCH_URL).mock(side_effect=lambda request: responses[request.url.params["api_key"]])
+    await harness.keys.set(7, USER_KEY)
+
+    await harness.feed(update(message(photo=PHOTO)))
+
+    assert "🔑 own key rejected, shared key" in _report(harness)
+    [event] = _admin_messages(harness)
+    assert event.text == (
+        f'<b>🔑 SauceNAO rejected a saved key</b>\n👤 <a href="tg://user?id=7">User</a> · <code>7</code>\nvia @{BOT_USERNAME}'
+    )
+    assert event.disable_notification is True
+
+
+async def test_key_events_follow_the_activity_switch(make_harness, respx_mock):
+    harness = make_harness(report_results=False)
+    respx_mock.get(SEARCH_URL).respond(json=sauce_response([]))
+
+    await harness.feed(update(message(text=USER_KEY)))
+
+    assert await harness.keys.get(7) is not None
+    assert _admin_messages(harness) == []

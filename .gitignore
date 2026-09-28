@@ -16,6 +16,8 @@ htmlcov/
 .env
 .env.*
 !.env.example
+# DATA_DIR: users' SauceNAO keys
+/data/
 
 # Editors / OS
 .idea/

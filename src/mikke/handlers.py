@@ -24,13 +24,13 @@ from aiogram.types import (
     User,
 )
 
-from mikke import texts
+from mikke import apikey, texts
 from mikke.flood import FloodMiddleware
 from mikke.media import Media, find_media, normalize_url
 from mikke.observability import is_expected
 from mikke.reports import Reporter, Search
 from mikke.scenes import Alert, SceneSearcher
-from mikke.search import Answer, Searcher
+from mikke.search import Answer, Asker, Searcher
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ def build_router(favourite_groups: list[int]) -> Router:
     router.message.register(on_new_members, F.new_chat_members)
     router.inline_query.register(on_inline_query)
     router.chosen_inline_result.register(on_chosen_inline_result, F.result_id == INLINE_RESULT_ID)
+    router.include_router(apikey.build_router())
 
     # Everything that starts a search; the flood check counts only these messages
     search = Router(name="search")
@@ -92,27 +93,44 @@ async def on_trigger(message: Message, bot: Bot, searcher: Searcher, reporter: R
         if (message.text or "").startswith("/"):
             await message.reply(texts.USAGE)
         return
-    await _search_message(target, bot, searcher, reporter, media, asked_by=message)
+    await _search_message(target, bot, searcher, reporter, media, asked_by=message, asker=_asker(message))
 
 
 async def search_message(message: Message, bot: Bot, searcher: Searcher, reporter: Reporter, media: Media) -> None:
-    """Media in private, or a photo in a favourite group."""
-    await _search_message(message, bot, searcher, reporter, media, asked_by=message)
+    """Media in private, or a photo in a favourite group, which nobody asked for: the shared key searches it."""
+    asker = _asker(message) if message.chat.type == ChatType.PRIVATE else None
+    await _search_message(message, bot, searcher, reporter, media, asked_by=message, asker=asker)
+
+
+def _asker(message: Message) -> Asker | None:
+    """The user who sent `message`; nobody for a channel or an anonymous admin."""
+    user = message.from_user
+    if user is None or message.sender_chat is not None:
+        return None
+    return Asker(user.id, private=message.chat.type == ChatType.PRIVATE)
 
 
 async def _search_message(
-    message: Message, bot: Bot, searcher: Searcher, reporter: Reporter, media: Media, *, asked_by: Message
+    message: Message,
+    bot: Bot,
+    searcher: Searcher,
+    reporter: Reporter,
+    media: Media,
+    *,
+    asked_by: Message,
+    asker: Asker | None,
 ) -> None:
     """Reply to `message` with the placeholder, edit it into the answer, then report the search to the owner.
 
     `asked_by` is the message that asked: `message` itself, or a /sauce in reply to it.
+    `asker` is whose SauceNAO key to use, if they have one.
     """
     placeholder = await message.answer(
         texts.LOADING,
         reply_markup=LOADING_KEYBOARD,
         reply_parameters=ReplyParameters(message_id=message.message_id, allow_sending_without_reply=True),
     )
-    answer = await searcher.search_file(bot, media)
+    answer = await searcher.search_file(bot, media, asker)
     if not answer.invalid_file:
         rows = answer.keyboard.inline_keyboard if answer.keyboard else []
         answer = replace(answer, keyboard=InlineKeyboardMarkup(inline_keyboard=[*rows, [SCENE_BUTTON]]))
@@ -185,7 +203,7 @@ async def on_chosen_inline_result(result: ChosenInlineResult, bot: Bot, searcher
     url = normalize_url(result.query)
     if url is None or result.inline_message_id is None:
         return
-    answer = await searcher.search_url(url)
+    answer = await searcher.search_url(url, Asker(result.from_user.id))
     await _edit(bot, answer, inline_message_id=result.inline_message_id)
     await reporter.search(bot, Search("SauceNAO", answer.outcome, answer.text, result.from_user, image_url=url))
 

@@ -9,6 +9,9 @@ the thumbnails searched for GIFs, videos and animated stickers) by its public,
 token-free /img/ link, which Telegram fetches from us. If Telegram rejects the
 rich message, the same report goes out as a plain HTML message with the
 original media resent as a reply to it.
+
+Users' own SauceNAO keys are reported as events (added, removed, refused at
+/apikey, rejected during a search), with who and never the key.
 """
 
 import html
@@ -23,11 +26,16 @@ from aiogram.exceptions import TelegramAPIError, TelegramForbiddenError
 from aiogram.types import Chat, InputMediaPhoto, InputRichMessage, InputRichMessageMedia, ReplyParameters, User
 
 from mikke.media import Media
+from mikke.observability import redact
+from mikke.saucenao import Account
 
 logger = logging.getLogger(__name__)
 
 Engine = Literal["SauceNAO", "trace.moe"]
 Status = Literal["found", "not_found", "limit", "error", "invalid_file"]
+# The asker's own SauceNAO key: it answered, or it was used up for the day or rejected and the shared key stood in
+KeyUse = Literal["own", "used_up", "rejected"]
+KeyEvent = Literal["added", "removed", "rejected", "refused"]
 
 HEADINGS: dict[Status, str] = {
     "found": "✅ {}: found",
@@ -35,6 +43,19 @@ HEADINGS: dict[Status, str] = {
     "limit": "⏳ {}: quota used up",
     "error": "⚠ {}: error",
     "invalid_file": "🚫 {}: Telegram would not give the file",
+}
+KEY_NOTES: dict[KeyUse, str] = {
+    "own": "🔑 own key",
+    "used_up": "🔑 own key used up, shared key",
+    "rejected": "🔑 own key rejected, shared key",
+}
+KEY_EVENTS: dict[KeyEvent, str] = {
+    "added": "🔑 SauceNAO key added",
+    "removed": "🔑 SauceNAO key removed",
+    # during a search: the shared key stood in, and the user was told
+    "rejected": "🔑 SauceNAO rejected a saved key",
+    # at /apikey: not saved
+    "refused": "🔑 SauceNAO refused a new key",
 }
 # The engine's own page for an image URL, so the owner can look again
 ENGINE_PAGES: dict[Engine, str] = {"SauceNAO": "https://saucenao.com/search.php?", "trace.moe": "https://trace.moe/?"}
@@ -61,6 +82,7 @@ class Outcome:
     hits: tuple[Hit, ...] = ()
     # "error": the exception; "invalid_file": why Telegram would not give the file
     error: str | None = None
+    key: KeyUse | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +155,25 @@ class Reporter:
                 await self.error(bot, f"{search.engine} search failed for {subject}\n{search.outcome.error}")
         except Exception:
             logger.exception("Could not report a %s search", search.engine)
+        if search.outcome.key == "rejected":
+            await self.key(bot, search.user, "rejected")
+
+    async def key(self, bot: Bot, user: User | None, event: KeyEvent, account: Account | None = None) -> None:
+        """A user's own SauceNAO key was added, removed or rejected: who, never the key. Never raises."""
+        if not (self._results and self._admin_ids):
+            return
+        try:
+            lines = [f"<b>{KEY_EVENTS[event]}</b>"]
+            if account is not None and (summary := _account(account)):
+                lines.append(summary)
+            lines += [_who(user, None), f"via @{(await bot.me()).username}"]
+            for admin_id in self._admin_ids:
+                try:
+                    await bot.send_message(admin_id, "\n".join(lines), disable_notification=True)
+                except TelegramAPIError as e:
+                    await self._failed(bot, admin_id, "key event", e)
+        except Exception:
+            logger.exception("Could not report a key event")
 
     async def error(self, bot: Bot, description: str) -> None:
         if not self._errors:
@@ -209,6 +250,8 @@ def _render(search: Search, username: str, bot: Bot) -> _Report:
     footer = [f"via @{username}"]
     if outcome.cached:
         footer.append("💾 from the cache")
+    if outcome.key is not None:
+        footer.append(KEY_NOTES[outcome.key])
     if search.image_url:
         page = ENGINE_PAGES[search.engine] + urlencode({"url": search.image_url})
         footer.append(_link(page, search.engine))
@@ -227,6 +270,17 @@ def _hit(hit: Hit) -> str:
         parts.append(f"<b>{html.escape(hit.title, quote=False)}</b>")
     line = " ".join(parts)
     return " · ".join([line, *(_link(url, site) for site, url in hit.links)])
+
+
+def _account(account: Account) -> str:
+    parts = [account.plan] if account.plan else []
+    if account.short_limit is not None:
+        parts.append(f"{account.short_limit} per 30 s")
+    if account.long_limit is not None:
+        parts.append(f"{account.long_limit} a day")
+    if account.long_remaining is not None:
+        parts.append(f"{account.long_remaining} left today")
+    return " · ".join(parts)
 
 
 def _who(user: User | None, sender_chat: Chat | None) -> str:
@@ -278,7 +332,7 @@ def _link(url: str, text: str) -> str:
 
 def _hide_token(bot: Bot, text: str) -> str:
     # exception texts from aiohttp can contain Telegram file URLs, which carry the token
-    return text.replace(bot.token, "<token>")
+    return redact(text.replace(bot.token, "<token>"))
 
 
 async def _resend(bot: Bot, chat_id: int, media: Media, reply_to: int) -> None:

@@ -22,8 +22,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Runtime: the virtualenv only, no uv and no sources
 FROM python:3.13-slim
 ENV PYTHONUNBUFFERED=1 \
-    PATH="/app/.venv/bin:$PATH"
-RUN useradd --system --no-create-home --uid 10001 bot
+    PATH="/app/.venv/bin:$PATH" \
+    DATA_DIR=/data
+# /data holds the SQLite file with the SauceNAO keys users add. An empty named volume
+# mounted there starts as a copy of this directory, so it belongs to bot as well.
+RUN useradd --system --no-create-home --uid 10001 bot \
+    && install -d -o bot -m 700 /data
 COPY --from=builder /app/.venv /app/.venv
 USER bot
 # mikke-bot@<commit sha> from CI: the release of Sentry events. Built without it, events have none.

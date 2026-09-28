@@ -5,6 +5,7 @@ import logging
 from collections.abc import Callable, Iterator
 from urllib.parse import quote
 
+import httpx
 import pytest
 import sentry_sdk
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
@@ -28,6 +29,7 @@ from payloads import (
     EXTRA_BOT_TOKEN,
     EXTRA_BOT_USERNAME,
     PHOTO,
+    USER_KEY,
     bot_answer,
     button_press,
     message,
@@ -182,6 +184,9 @@ def test_scrubber_catches_tokens_and_keys_it_was_not_given():
     assert scrub.text("https://saucenao.com/search.php?api_key=abc123&db=999") == (
         f"https://saucenao.com/search.php?api_key={FILTERED}&db=999"
     )
+    # a user's own key, in the text of their command
+    assert scrub.text(f"text='/apikey {USER_KEY}'") == f"text='/apikey {FILTERED}'"
+    assert scrub.text(f"/APIKEY@{BOT_USERNAME}  {USER_KEY} x") == f"/APIKEY@{BOT_USERNAME}  {FILTERED} x"
 
 
 async def test_secrets_never_reach_sentry(sentry, caplog):
@@ -261,6 +266,55 @@ async def test_webhook_error_is_sent_once_without_the_secret_header_or_the_updat
     assert "REMOTE_ADDR" not in transport.sent
     for private in (TEXT, SENDER["first_name"], SENDER["username"]):
         assert private not in transport.sent
+
+
+async def test_a_users_key_never_reaches_sentry_or_the_owner(sentry, respx_mock):
+    harness, transport = sentry()
+    respx_mock.get(SEARCH_URL).respond(json=sauce_response([]))
+    # the confirmation fails: the update's error goes to Sentry and to the owner
+    harness.session.chat_errors[7] = RuntimeError("telegram exploded")
+    client = await _client(harness, secret=WEBHOOK_SECRET)
+    try:
+        body = update({**message(text=f"/apikey {USER_KEY}"), "from": SENDER})
+        response = await client.post("/", json=body, headers={"X-Telegram-Bot-Api-Secret-Token": WEBHOOK_SECRET})
+        assert response.status == 200
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+    finally:
+        await client.close()
+
+    [event] = transport.events
+    assert event["exception"]["values"][-1]["type"] == "RuntimeError"
+    assert USER_KEY not in transport.sent
+    [report] = [call for call in _sent(harness) if call.chat_id == ADMIN_ID]
+    assert "RuntimeError: telegram exploded" in report.text
+    assert all(USER_KEY not in call.text for call in _sent(harness))
+
+
+async def test_a_failed_key_check_reaches_sentry_without_the_key(sentry, respx_mock):
+    harness, transport = sentry()
+    respx_mock.get(SEARCH_URL).mock(side_effect=httpx.ConnectError(f"GET {SEARCH_URL}?api_key={USER_KEY} ({USER_KEY})"))
+
+    await harness.feed(update(message(text=USER_KEY)))
+
+    [event] = transport.events
+    assert event["logentry"]["message"].startswith("Checking a SauceNAO key failed")
+    assert USER_KEY not in transport.sent
+
+
+async def test_a_failed_search_with_a_users_key_keeps_it_out_of_sentry_and_the_report(sentry, respx_mock):
+    harness, transport = sentry()
+    respx_mock.post(SEARCH_URL).respond(500, text=f"error for api_key={USER_KEY} and {USER_KEY}")
+    await harness.keys.set(7, USER_KEY)
+
+    await harness.feed(_photo())
+
+    [event] = transport.events
+    assert event["logentry"]["message"].startswith("Search failed")
+    assert USER_KEY not in transport.sent
+    [report] = harness.session.calls(SendRichMessage)
+    assert "SauceNaoError: HTTP 500" in report.rich_message.html
+    assert USER_KEY not in report.rich_message.html
 
 
 # --- what is sent ------------------------------------------------------------
@@ -357,7 +411,8 @@ async def test_saucenao_limit_and_no_result_are_not_sent(sentry, respx_mock):
     route.respond(json=sauce_response([]))
     await harness.feed(update(message(photo=[{**PHOTO[1], "file_unique_id": "other-u"}])))
 
-    assert [call.text for call in harness.session.calls(EditMessageText)] == [texts.LIMIT_REACHED, texts.NO_RESULT]
+    limit, no_result = (call.text for call in harness.session.calls(EditMessageText))
+    assert (limit.startswith(texts.LIMIT_REACHED), no_result) == (True, texts.NO_RESULT)
     assert transport.events == []
 
 

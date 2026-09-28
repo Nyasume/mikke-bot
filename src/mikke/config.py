@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import re
+from pathlib import Path
 from typing import Annotated, Literal, Self
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -52,8 +53,11 @@ class Settings(BaseSettings):
     # Every error: handler failures, and failed searches when REPORT_RESULTS is off
     report_errors: bool = True
 
-    # Every photo posted in these chats is searched automatically
+    # Every photo posted in these chats is searched automatically, always with SAUCENAO_API_KEY
     favourite_groups: Annotated[list[int], NoDecode] = []
+
+    # What must survive restarts: the SauceNAO keys users add with /apikey (mikke.sqlite3). /data in the image.
+    data_dir: Path = Path("data")
 
     bot_mode: Literal["polling", "webhook"] = "polling"
     # Public base URL of the bot's HTTP server, e.g. https://example.org/mikke.

@@ -1,12 +1,27 @@
+import asyncio
+
+import httpx
+import pytest
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import GetFile
 
 from mikke import texts
+from mikke.keys import UserKey
 from mikke.media import Media
 from mikke.reports import Outcome
 from mikke.saucenao import SEARCH_URL
-from mikke.search import CACHE_TTL_SECONDS
-from payloads import ANIME, BOT_TOKEN, PUBLIC_URL, sauce_response, telegram_file_error
+from mikke.search import ADD_KEY_CALLBACK, CACHE_TTL_SECONDS, Asker
+from payloads import (
+    ANIME,
+    API_KEY,
+    BOT_TOKEN,
+    DAILY_LIMIT,
+    PUBLIC_URL,
+    UNKNOWN_KEY,
+    USER_KEY,
+    sauce_response,
+    telegram_file_error,
+)
 
 PHOTO = Media("photo-file-id", "photo-unique", "photo", "photo-file-id")
 
@@ -190,3 +205,169 @@ async def test_download_failure_keeps_the_token_out_of_the_outcome_and_logs(resp
     assert route.call_count == 0
     assert answer.outcome.error == "DownloadError: ClientResponseError HTTP 502"
     assert BOT_TOKEN not in caplog.text
+
+
+# --- whose key ---------------------------------------------------------------
+
+
+def _by_key(responses: dict[str, httpx.Response]):
+    """A respx side effect answering each API key its own way."""
+    return lambda request: responses[request.url.params["api_key"]]
+
+
+def _keys_used(route) -> list[str]:
+    return [call.request.url.params["api_key"] for call in route.calls]
+
+
+def _layout(markup) -> list[list[str]]:
+    return [[button.text for button in row] for row in markup.inline_keyboard]
+
+
+async def test_the_askers_own_key_searches_for_them(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([ANIME]))
+    await harness.keys.set(7, USER_KEY)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7))
+
+    assert _keys_used(route) == [USER_KEY]
+    assert answer.outcome.key == "own"
+    assert answer.text.startswith("<b>One Piece")
+
+
+async def test_without_an_asker_or_a_key_the_shared_key_searches(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).respond(json=sauce_response([]))
+    await harness.keys.set(7, USER_KEY)
+
+    automatic = await harness.searcher.search_file(harness.bot, PHOTO)
+    keyless = await harness.searcher.search_file(harness.bot, Media("b-id", "b-u", "photo", "b-id"), Asker(8))
+
+    assert _keys_used(route) == [API_KEY, API_KEY]
+    assert automatic.outcome.key is keyless.outcome.key is None
+
+
+async def test_an_own_key_used_up_for_the_day_falls_back_to_the_shared_key(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).mock(
+        side_effect=_by_key(
+            {
+                USER_KEY: httpx.Response(429, json=DAILY_LIMIT),
+                API_KEY: httpx.Response(200, json=sauce_response([ANIME])),
+            }
+        )
+    )
+    await harness.keys.set(7, USER_KEY)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7, private=True))
+    again = await harness.searcher.search_file(harness.bot, Media("b-id", "b-u", "photo", "b-id"), Asker(7))
+
+    assert answer.text.startswith("<b>One Piece")
+    assert (answer.outcome.key, again.outcome.key) == ("used_up", "used_up")
+    # the user's key rests; the file was downloaded once per search
+    assert _keys_used(route) == [USER_KEY, API_KEY, API_KEY]
+    assert len(harness.session.calls(GetFile)) == 2
+    # still a valid key, nothing to tell the user
+    assert await harness.keys.get(7) == UserKey(USER_KEY, valid=True)
+
+
+async def test_a_rejected_key_falls_back_and_the_user_is_told_once(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).mock(
+        side_effect=_by_key(
+            {
+                USER_KEY: httpx.Response(403, json=UNKNOWN_KEY),
+                API_KEY: httpx.Response(200, json=sauce_response([ANIME])),
+            }
+        )
+    )
+    await harness.keys.set(7, USER_KEY)
+    pictures = [Media(f"{n}-id", f"{n}-u", "photo", f"{n}-id") for n in range(3)]
+
+    answers = await asyncio.gather(*(harness.searcher.search_file(harness.bot, media, Asker(7)) for media in pictures))
+
+    assert all(answer.text.startswith("<b>One Piece") for answer in answers)
+    [told] = [answer for answer in answers if texts.KEY_REJECTED in answer.text]
+    assert told.text.endswith(f"\n\n{texts.KEY_REJECTED}")
+    assert sorted(str(answer.outcome.key) for answer in answers) == ["None", "None", "rejected"]
+    assert _keys_used(route).count(API_KEY) == 3
+    assert await harness.keys.get(7) == UserKey(USER_KEY, valid=False)
+
+    # from now on the shared key searches for them, without a word
+    later = await harness.searcher.search_file(harness.bot, Media("d-id", "d-u", "photo", "d-id"), Asker(7))
+    assert (later.outcome.key, _keys_used(route)[-1]) == (None, API_KEY)
+    assert texts.KEY_REJECTED not in later.text
+
+
+async def test_an_own_keys_30_second_line_does_not_spill_into_the_shared_one(respx_mock, harness):
+    route = respx_mock.post(SEARCH_URL).mock(
+        side_effect=_by_key(
+            {
+                USER_KEY: httpx.Response(429, text="Search Rate Too High"),
+                API_KEY: httpx.Response(200, json=sauce_response([ANIME])),
+            }
+        )
+    )
+    await harness.keys.set(7, USER_KEY)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7, private=True))
+
+    # someone with a key of their own is not offered one
+    assert answer.text == texts.LIMIT_REACHED
+    assert answer.outcome == Outcome("limit", key="own")
+    assert set(_keys_used(route)) == {USER_KEY}
+
+
+# --- what a limit answer says ------------------------------------------------
+
+
+@pytest.fixture
+def used_up(respx_mock):
+    return respx_mock.post(SEARCH_URL).respond(429, json=DAILY_LIMIT)
+
+
+async def test_a_limit_in_private_offers_a_key_of_ones_own(used_up, harness):
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7, private=True))
+
+    assert answer.text == f"{texts.LIMIT_REACHED}\n\n{texts.KEY_PITCH}"
+    assert _layout(answer.keyboard) == [
+        ["Google Lens", "Yandex", "Bing"],
+        ["SauceNAO", "ascii2d", "TinEye"],
+        ["🔑 Add my free key"],
+    ]
+    assert answer.keyboard.inline_keyboard[-1][0].callback_data == ADD_KEY_CALLBACK
+
+
+async def test_a_30_second_limit_in_private_offers_it_too(respx_mock, harness):
+    respx_mock.post(SEARCH_URL).respond(429, text="Search Rate Too High")
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7, private=True))
+
+    assert answer.text == f"{texts.LIMIT_REACHED}\n\n{texts.KEY_PITCH}"
+
+
+@pytest.mark.parametrize("asker", [Asker(7), None], ids=["group-or-inline", "automatic"])
+async def test_a_limit_elsewhere_is_kept_short(used_up, harness, asker):
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, asker)
+
+    assert answer.text == texts.LIMIT_REACHED
+    assert len(answer.keyboard.inline_keyboard) == 2
+
+
+async def test_no_pitch_for_someone_whose_own_key_is_used_up_too(used_up, harness):
+    await harness.keys.set(7, USER_KEY)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7, private=True))
+
+    assert answer.text == texts.LIMIT_REACHED
+    assert answer.outcome == Outcome("limit", key="used_up")
+
+
+async def test_a_rejected_key_in_private_comes_with_the_button(respx_mock, harness):
+    respx_mock.post(SEARCH_URL).mock(
+        side_effect=_by_key(
+            {USER_KEY: httpx.Response(403, json=UNKNOWN_KEY), API_KEY: httpx.Response(429, json=DAILY_LIMIT)}
+        )
+    )
+    await harness.keys.set(7, USER_KEY)
+
+    answer = await harness.searcher.search_file(harness.bot, PHOTO, Asker(7, private=True))
+
+    assert answer.text == f"{texts.LIMIT_REACHED}\n\n{texts.KEY_REJECTED}"
+    assert _layout(answer.keyboard)[-1] == ["🔑 Add my free key"]

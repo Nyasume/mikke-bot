@@ -15,6 +15,8 @@ EXTRA_BOT_TOKEN = "43:EXTRA-token"
 EXTRA_BOT_USERNAME = "MikkeSauceTestBot"
 USERNAMES = {42: BOT_USERNAME, 43: EXTRA_BOT_USERNAME}
 API_KEY = "sauce-key"
+# a user's own key, shaped like the real ones: 40 lowercase hex characters
+USER_KEY = "0123456789abcdef0123456789abcdef0123a1b2"
 ADMIN_ID = 1
 FAVOURITE_GROUP = -1001
 PUBLIC_URL = "https://example.org/mikke"

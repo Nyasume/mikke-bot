@@ -41,10 +41,11 @@ logger = logging.getLogger(__name__)
 FILTERED = "[Filtered]"
 # The secrets in text we did not write, even cut short or in another bot's URL:
 # Telegram URLs carry the bot token (api.telegram.org/bot<token>/..., /file/bot<token>/...),
-# SauceNAO URLs the api_key
+# SauceNAO URLs the api_key, a user's /apikey command their own key. The first group stays.
 SECRET_PATTERNS = (
-    re.compile(r"(?<=/bot)\d+(?::|%3A)[\w-]+", re.IGNORECASE),
-    re.compile(r"(?<=api_key=)[^&\s\"']+"),
+    re.compile(r"(/bot)\d+(?::|%3A)[\w-]+", re.IGNORECASE),
+    re.compile(r"(api_key=)[^&\s\"']+"),
+    re.compile(r"(/apikey(?:@\w+)?\s+)[^\s\"'<]+", re.IGNORECASE),
 )
 # Header values that never leave: the webhook secret, the trace.moe key, client IPs behind Cloudflare
 DENYLIST = [*DEFAULT_DENYLIST, "x-telegram-bot-api-secret-token", "x-trace-key"]
@@ -61,6 +62,13 @@ EXPECTED_BAD_REQUESTS = (
     "query is too old",
     "not enough rights",
 )
+
+
+def redact(text: str) -> str:
+    """`text` without the secrets `SECRET_PATTERNS` find."""
+    for pattern in SECRET_PATTERNS:
+        text = pattern.sub(rf"\g<1>{FILTERED}", text)
+    return text
 
 
 def is_expected(error: BaseException) -> bool:
@@ -97,9 +105,7 @@ class Scrubber:
     def text(self, value: str) -> str:
         for secret in self._secrets:
             value = value.replace(secret, FILTERED)
-        for pattern in SECRET_PATTERNS:
-            value = pattern.sub(FILTERED, value)
-        return value
+        return redact(value)
 
     def __call__(self, value: Any) -> Any:
         if isinstance(value, str):
