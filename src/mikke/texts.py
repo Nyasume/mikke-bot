@@ -17,7 +17,11 @@ LOADING = "<i>Mikke is looking...</i>"
 LOADING_BUTTON = "🔍"
 
 NO_RESULT = "Mikke looked everywhere, but couldn't find it. <i>Maybe another search engine will have better luck?</i>"
-LIMIT_REACHED = "Mikke has searched so much she needs a little break. Please try again in a bit!"
+# under it: the other engines' buttons, which work right away
+LIMIT_REACHED = (
+    "Mikke has used up her SauceNAO searches for now and has to wait until they come back. "
+    "<b>But you don't have to!</b> 👇 Tap a search engine below and it will look for this picture right away."
+)
 INVALID_FILE = "<i>Mikke can't open this file.</i>"
 ERROR = "<b>Oops!</b> Something went wrong while Mikke was looking. Please try again in a bit..."
 # SauceNAO down or out of reach, also on the retry
@@ -43,7 +47,7 @@ REMOVE_KEY_BUTTON = "🗑 Remove my key"
 # after LIMIT_REACHED, in private, for someone without a key of their own
 KEY_PITCH = (
     "🔑 <b>Psst!</b> With your own free SauceNAO key you get your own searches, 100 a day, "
-    "and never have to wait for Mikke's. Tap the button below, it only takes a minute!"
+    "and never have to wait for Mikke's. Tap <b>Add my free key</b>, it only takes a minute!"
 )
 # after the answer, once, when SauceNAO stopped accepting the user's key
 KEY_REJECTED = (
